@@ -8,7 +8,7 @@
 
 ## 📋 Overview
 
-**Agency Knowledge Hub** is an intelligent assistant that provides unified access to your project management and document repositories. Built for **Agency Agency**, it combines the power of **Claude AI** with seamless integrations to **ClickUp** and **Google Drive**, enabling natural language queries across all your business data.
+**Agency Knowledge Hub** is an intelligent assistant that provides unified access to your project management and document repositories. Built for **56K Agency** and released for everyone, it combines the power of **Claude AI** with seamless integrations to **ClickUp** and **Google Drive**, enabling natural language queries across all your business data.
 
 ### ✨ Key Features
 
