@@ -1,0 +1,40 @@
+{
+  "name": "56k-knowledge-hub",
+  "version": "1.0.0",
+  "description": "AI-powered knowledge assistant for 56k Agency",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "frontend": "npx http-server ./public -p 8080",
+    "setup": "npm install && node setup.js",
+    "test": "node test-connections.js"
+  },
+  "keywords": [
+    "ai",
+    "claude",
+    "clickup",
+    "google-drive",
+    "knowledge-management"
+  ],
+  "author": "56k Agency",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "axios": "^1.6.0",
+    "google-auth-library": "^9.0.0",
+    "sqlite3": "^5.1.6",
+    "body-parser": "^1.20.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "http-server": "^14.1.1"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
+}
