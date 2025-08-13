@@ -1,4 +1,4 @@
-# 56k Knowledge Hub 🚀
+# Agency Knowledge Hub 🚀
 
 > **AI-powered knowledge assistant that unifies access to ClickUp and Google Drive through Claude AI intelligence**
 
@@ -8,7 +8,7 @@
 
 ## 📋 Overview
 
-**56k Knowledge Hub** is an intelligent assistant that provides unified access to your project management and document repositories. Built for **56k Agency**, it combines the power of **Claude AI** with seamless integrations to **ClickUp** and **Google Drive**, enabling natural language queries across all your business data.
+**Agency Knowledge Hub** is an intelligent assistant that provides unified access to your project management and document repositories. Built for **Agency Agency**, it combines the power of **Claude AI** with seamless integrations to **ClickUp** and **Google Drive**, enabling natural language queries across all your business data.
 
 ### ✨ Key Features
 
@@ -42,8 +42,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/56k-knowledge-hub.git
-cd 56k-knowledge-hub
+git clone https://github.com/your-org/Agency-knowledge-hub.git
+cd Agency-knowledge-hub
 
 # Run the setup wizard
 npm run setup
@@ -66,8 +66,8 @@ That's it! 🎉 The setup wizard will guide you through the configuration.
 
 ```bash
 # Download and setup
-git clone https://github.com/your-org/56k-knowledge-hub.git
-cd 56k-knowledge-hub
+git clone https://github.com/your-org/Agency-knowledge-hub.git
+cd Agency-knowledge-hub
 npm run setup
 ```
 
@@ -215,7 +215,7 @@ npm test          # Test API connections
 ### Project Structure
 
 ```
-56k-knowledge-hub/
+Agency-knowledge-hub/
 ├── server.js              # Main backend server
 ├── setup.js               # Configuration wizard
 ├── index.html             # Frontend application
@@ -268,8 +268,8 @@ CMD ["node", "server.js"]
 
 ```bash
 # Build and run
-docker build -t 56k-hub .
-docker run -p 3000:3000 --env-file .env 56k-hub
+docker build -t Agency-hub .
+docker run -p 3000:3000 --env-file .env Agency-hub
 ```
 
 ### Cloud Deployment
@@ -400,7 +400,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ```
 MIT License
 
-Copyright (c) 2024 56k Agency
+Copyright (c) 2024 Agency Agency
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -412,9 +412,9 @@ in the Software without restriction...
 ### Getting Help
 
 - 📖 **Documentation**: [Full Documentation](./docs/documentation.md)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/your-org/56k-knowledge-hub/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/your-org/56k-knowledge-hub/discussions)
-- 📧 **Email**: support@56k.agency
+- 🐛 **Issues**: [GitHub Issues](https://github.com/your-org/Agency-knowledge-hub/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/your-org/Agency-knowledge-hub/discussions)
+- 📧 **Email**: support@Agency.agency
 
 ### Resources
 
@@ -443,18 +443,18 @@ in the Software without restriction...
 - **Anthropic** for Claude AI
 - **ClickUp** for their excellent API
 - **Google** for Workspace APIs
-- **56k Agency Team** for testing and feedback
+- **Agency Agency Team** for testing and feedback
 - **Open Source Community** for the libraries used
 
 ---
 
 <div align="center">
 
-**Built with ❤️ by [56k Agency](https://56k.agency)**
+**Built with ❤️ by [Agency Agency](https://Agency.agency)**
 
-[![GitHub stars](https://img.shields.io/github/stars/your-org/56k-knowledge-hub?style=social)](https://github.com/your-org/56k-knowledge-hub/stargazers)
-[![Twitter Follow](https://img.shields.io/twitter/follow/56k_agency?style=social)](https://twitter.com/56k_agency)
+[![GitHub stars](https://img.shields.io/github/stars/your-org/Agency-knowledge-hub?style=social)](https://github.com/your-org/Agency-knowledge-hub/stargazers)
+[![Twitter Follow](https://img.shields.io/twitter/follow/Agency_agency?style=social)](https://twitter.com/Agency_agency)
 
-[⭐ Star this repo](https://github.com/your-org/56k-knowledge-hub/stargazers) | [🐛 Report Bug](https://github.com/your-org/56k-knowledge-hub/issues) | [✨ Request Feature](https://github.com/your-org/56k-knowledge-hub/issues)
+[⭐ Star this repo](https://github.com/your-org/Agency-knowledge-hub/stargazers) | [🐛 Report Bug](https://github.com/your-org/Agency-knowledge-hub/issues) | [✨ Request Feature](https://github.com/your-org/Agency-knowledge-hub/issues)
 
 </div>
