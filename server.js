@@ -275,7 +275,7 @@ app.get('/auth/google', (req, res) => {
 
   const redirectUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
     `client_id=${process.env.GOOGLE_CLIENT_ID}` +
-    `&redirect_uri=${encodeURIComponent(process.env.FRONTEND_URL + '/callback/google')}` +
+    `&redirect_uri=${encodeURIComponent('http://localhost:3000/callback/google')}` +
     `&response_type=code` +
     `&scope=${encodeURIComponent('email profile https://www.googleapis.com/auth/drive.readonly')}` +
     `&access_type=offline` +
@@ -294,7 +294,7 @@ app.get('/callback/google', async (req, res) => {
       code,
       client_id: process.env.GOOGLE_CLIENT_ID,
       client_secret: process.env.GOOGLE_CLIENT_SECRET,
-      redirect_uri: process.env.FRONTEND_URL + '/callback/google',
+      redirect_uri: 'http://localhost:3000/callback/google',
       grant_type: 'authorization_code'
     });
 
