@@ -9,9 +9,11 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
-// Import AI Executive Engine
-const AIExecutiveEngine = require('./ai-executive-engine');
-const BusinessIntelligence = require('./business-intelligence');
+// Import AI-First Engine - Let Claude handle ALL the intelligence
+const AIFirstEngine = require('./ai-first-engine');
+// Legacy engines (deprecated - will be removed)
+// const AIExecutiveEngine = require('./ai-executive-engine');
+// const BusinessIntelligence = require('./business-intelligence');
 
 const app = express();
 const PORT = process.env.PORT || 3000;

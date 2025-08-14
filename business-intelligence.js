@@ -52,7 +52,11 @@ class BusinessIntelligence {
     };
     
     // Adjust query based on intent
-    if (intent.queryType === 'tomorrow_agenda') {
+    if (intent.queryType === 'task_deadline_analysis') {
+      // Get overdue tasks and tasks due soon
+      params.include_closed = false;
+      // Don't filter by date to get all open tasks
+    } else if (intent.queryType === 'tomorrow_agenda') {
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       params.due_date_gt = tomorrow.getTime();
@@ -137,7 +141,87 @@ class BusinessIntelligence {
     }
     
     // Specific intent handling
-    if (intent.queryType === 'tomorrow_agenda') {
+    if (intent.queryType === 'task_deadline_analysis') {
+      intelligence += `**🚨 ANALISI SCADENZE TASK:**\n`;
+      
+      // Categorize tasks by deadline status
+      const now = Date.now();
+      const overdueTasks = tasks.filter(task => 
+        task.due_date && parseInt(task.due_date) < now
+      );
+      
+      const dueTodayTasks = tasks.filter(task => {
+        if (!task.due_date) return false;
+        const taskDate = new Date(parseInt(task.due_date));
+        const today = new Date();
+        return taskDate.toDateString() === today.toDateString();
+      });
+      
+      const dueTomorrowTasks = tasks.filter(task => {
+        if (!task.due_date) return false;
+        const taskDate = new Date(parseInt(task.due_date));
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        return taskDate.toDateString() === tomorrow.toDateString();
+      });
+      
+      const dueThisWeekTasks = tasks.filter(task => {
+        if (!task.due_date) return false;
+        const taskDate = new Date(parseInt(task.due_date));
+        const weekFromNow = new Date();
+        weekFromNow.setDate(weekFromNow.getDate() + 7);
+        return parseInt(task.due_date) > Date.now() && parseInt(task.due_date) < weekFromNow.getTime();
+      });
+      
+      if (overdueTasks.length > 0) {
+        intelligence += `\n🔴 **TASK IN RITARDO (${overdueTasks.length}):**\n`;
+        overdueTasks.slice(0, 5).forEach(task => {
+          const daysLate = Math.floor((Date.now() - parseInt(task.due_date)) / (1000 * 60 * 60 * 24));
+          intelligence += `- **${task.name}**\n`;
+          intelligence += `  ⏰ ${daysLate} giorni di ritardo\n`;
+          intelligence += `  👤 ${task.assignees?.map(a => a.username).join(', ') || 'Non assegnato'}\n`;
+          intelligence += `  📁 ${this.extractClientFromTask(task)}\n`;
+          intelligence += `  🎯 ${task.priority?.priority || 'Normale'}\n\n`;
+        });
+      }
+      
+      if (dueTodayTasks.length > 0) {
+        intelligence += `\n🟡 **SCADENZE OGGI (${dueTodayTasks.length}):**\n`;
+        dueTodayTasks.forEach(task => {
+          intelligence += `- **${task.name}**\n`;
+          intelligence += `  👤 ${task.assignees?.map(a => a.username).join(', ') || 'Non assegnato'}\n`;
+          intelligence += `  📁 ${this.extractClientFromTask(task)}\n\n`;
+        });
+      }
+      
+      if (dueTomorrowTasks.length > 0) {
+        intelligence += `\n🟠 **SCADENZE DOMANI (${dueTomorrowTasks.length}):**\n`;
+        dueTomorrowTasks.forEach(task => {
+          intelligence += `- **${task.name}**\n`;
+          intelligence += `  👤 ${task.assignees?.map(a => a.username).join(', ') || 'Non assegnato'}\n`;
+          intelligence += `  📁 ${this.extractClientFromTask(task)}\n\n`;
+        });
+      }
+      
+      // Executive summary and recommendations
+      const totalCritical = overdueTasks.length + dueTodayTasks.length;
+      if (totalCritical > 0) {
+        intelligence += `\n💡 **RACCOMANDAZIONI EXECUTIVE:**\n`;
+        intelligence += `- ${totalCritical} task richiedono attenzione immediata\n`;
+        
+        if (overdueTasks.length > 3) {
+          intelligence += `- Considerare riallocazione risorse per gestire arretrati\n`;
+        }
+        
+        const overloadedUsers = this.findOverloadedUsers(overdueTasks.concat(dueTodayTasks));
+        if (overloadedUsers.length > 0) {
+          intelligence += `- Utenti sovraccarichi: ${overloadedUsers.join(', ')}\n`;
+        }
+        
+        intelligence += `- Schedulare review meeting per prioritizzazione\n`;
+      }
+      
+    } else if (intent.queryType === 'tomorrow_agenda') {
       const tomorrowTasks = tasks.filter(task => {
         if (!task.due_date) return false;
         const taskDate = new Date(parseInt(task.due_date));
@@ -183,6 +267,23 @@ class BusinessIntelligence {
     });
     
     return workload;
+  }
+  
+  static findOverloadedUsers(criticalTasks) {
+    const userTaskCount = {};
+    
+    criticalTasks.forEach(task => {
+      if (task.assignees) {
+        task.assignees.forEach(assignee => {
+          userTaskCount[assignee.username] = (userTaskCount[assignee.username] || 0) + 1;
+        });
+      }
+    });
+    
+    // Users with more than 3 critical tasks are considered overloaded
+    return Object.entries(userTaskCount)
+      .filter(([user, count]) => count > 3)
+      .map(([user, count]) => user);
   }
   
   static extractClientFromTask(task) {

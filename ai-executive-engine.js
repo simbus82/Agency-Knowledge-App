@@ -61,10 +61,10 @@ class AIExecutiveEngine {
     const isExecutiveQuery = /briefing|dashboard|overview|status|report|analisi|performance|kpi|roi/i.test(normalizedQuery);
     
     // Time-based Intent
-    const isTimeQuery = /oggi|domani|settimana|mese|ieri|prossim|scadenz|deadline/i.test(normalizedQuery);
+    const isTimeQuery = /oggi|domani|settimana|mese|ieri|prossim|scadenz|deadline|ritardo|scaduto/i.test(normalizedQuery);
     
     // Project Management Intent  
-    const isProjectQuery = /progett|client|task|milestone|budget|delivery|blockers?|rischi?/i.test(normalizedQuery);
+    const isProjectQuery = /progett|client|task|milestone|budget|delivery|blockers?|rischi?|scadenz|ritardo|mostra.*task/i.test(normalizedQuery);
     
     // Team Management Intent
     const isTeamQuery = /team|colleghi?|persone?|workload|capacity|chi|sovraccaric|performance/i.test(normalizedQuery);
@@ -96,6 +96,7 @@ class AIExecutiveEngine {
   determineQueryType(query) {
     if (/briefing.*oggi|status.*oggi|cosa.*oggi/i.test(query)) return 'daily_briefing';
     if (/cosa.*fare.*domani|impegni.*domani|agenda.*domani/i.test(query)) return 'tomorrow_agenda';
+    if (/task.*scadenz|task.*ritardo|scadenz.*task|ritardo.*task|mostra.*task.*scad/i.test(query)) return 'task_deadline_analysis';
     if (/progett.*rischi?|rischi?.*progett/i.test(query)) return 'project_risk_analysis';
     if (/team.*performance|performance.*team/i.test(query)) return 'team_analytics';
     if (/client.*portfolio|portfolio.*client/i.test(query)) return 'client_analysis';
