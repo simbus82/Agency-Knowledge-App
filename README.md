@@ -42,8 +42,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/simbus82/Agency-knowledge-hub.git
-cd Agency-knowledge-hub
+git clone https://github.com/simbus82/Agency-Knowledge-App.git
+cd Agency-Knowledge-App
 
 # Run the setup wizard
 npm run setup
@@ -66,8 +66,8 @@ That's it! 🎉 The setup wizard will guide you through the configuration.
 
 ```bash
 # Download and setup
-git clone https://github.com/simbus82/Agency-knowledge-hub.git
-cd Agency-knowledge-hub
+git clone https://github.com/simbus82/Agency-Knowledge-App.git
+cd Agency-Knowledge-App
 npm run setup
 ```
 
@@ -215,7 +215,7 @@ npm test          # Test API connections
 ### Project Structure
 
 ```
-Agency-knowledge-hub/
+Agency-Knowledge-App/
 ├── server.js              # Main backend server
 ├── setup.js               # Configuration wizard
 ├── index.html             # Frontend application
@@ -412,8 +412,8 @@ in the Software without restriction...
 ### Getting Help
 
 - 📖 **Documentation**: [Full Documentation](./docs/documentation.md)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/simbus82/Agency-knowledge-hub/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/simbus82/Agency-knowledge-hub/discussions)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/simbus82/Agency-Knowledge-App/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/simbus82/Agency-Knowledge-App/discussions)
 - 📧 **Email**: support@Agency.agency
 
 ### Resources
@@ -452,7 +452,7 @@ in the Software without restriction...
 
 **Built with ❤️ by me**
 
-[![GitHub stars](https://img.shields.io/github/stars/simbus82/Agency-knowledge-hub?style=social)](https://github.com/simbus82/Agency-knowledge-hub/stargazers)
-[⭐ Star this repo](https://github.com/simbus82/Agency-knowledge-hub/stargazers) | [🐛 Report Bug](https://github.com/simbus82/Agency-knowledge-hub/issues) | [✨ Request Feature](https://github.com/simbus82/Agency-knowledge-hub/issues)
+[![GitHub stars](https://img.shields.io/github/stars/simbus82/Agency-Knowledge-App?style=social)](https://github.com/simbus82/Agency-Knowledge-App/stargazers)
+[⭐ Star this repo](https://github.com/simbus82/Agency-Knowledge-App/stargazers) | [🐛 Report Bug](https://github.com/simbus82/Agency-Knowledge-App/issues) | [✨ Request Feature](https://github.com/simbus82/Agency-Knowledge-App/issues)
 
 </div>
