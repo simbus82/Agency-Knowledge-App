@@ -40,6 +40,12 @@ class AIFirstEngine {
     const prompt = `You are analyzing a user query to determine what data sources and information are needed.
 This is for 56k Agency, a digital marketing agency.
 
+The user asking the query is:
+- Name: ${context.userName}
+- Email: ${context.userEmail}
+
+When the user says "me", "my", "io", "miei", they are referring to this user.
+
 User Query: "${userQuery}"
 
 Available Data Sources:
@@ -59,7 +65,7 @@ Analyze this query and respond with ONLY a valid JSON object in this exact forma
         "status": "open/closed/all",
         "dateRange": "today/tomorrow/week/month/all",
         "priority": "urgent/high/normal/all",
-        "assignee": "specific person or all"
+        "assignee": "specific person, 'currentUser', or 'all'"
       },
       "lookingFor": "what to search in tasks"
     },
@@ -198,6 +204,22 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
       // Apply filters based on AI analysis
       const filters = analysis.searchParameters.clickup.filters;
       
+      // Handle assignee filter - NEW LOGIC
+      if (filters.assignee && filters.assignee === 'currentUser') {
+        try {
+          const userResponse = await axios.get('https://api.clickup.com/api/v2/user', {
+            headers: { 'Authorization': context.clickupToken }
+          });
+          const clickupUserId = userResponse.data.user.id;
+          if (clickupUserId) {
+            params.assignees = [clickupUserId];
+            console.log(`ℹ️ Filtering tasks for current user: ${context.userName} (ID: ${clickupUserId})`);
+          }
+        } catch (error) {
+          console.error('Could not fetch ClickUp user ID', error.message);
+        }
+      }
+
       if (filters.status !== 'all') {
         params.statuses = filters.status === 'open' ? ['open'] : ['closed'];
       }
@@ -279,16 +301,17 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
         console.log(`🔍 Drive search: ${query}`);
 
         const response = await axios.get('https://www.googleapis.com/drive/v3/files', {
-          headers: { 'Authorization': `Bearer ${context.googleAccessToken}` },
-          params: {
-            q: query,
-            orderBy: 'modifiedTime desc',
-            pageSize: 10,
-            fields: 'files(id,name,mimeType,modifiedTime,webViewLink,size,owners)'
-          }
+            headers: { 'Authorization': `Bearer ${context.googleAccessToken}` },
+            params: {
+                q: `fullText contains '${searchTerms}'`,
+                fields: 'files(id, name, mimeType, webViewLink, createdTime, modifiedTime, owners, parents, description, shared, driveId)',
+                corpora: 'allDrives',
+                includeItemsFromAllDrives: true,
+                supportsAllDrives: true
+            }
         });
         
-        if (response.data.files) {
+        if (response.data.files.length > 0) {
           allResults.push(...response.data.files);
         }
       }
@@ -353,6 +376,7 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
 
     const prompt = `You are the AI Executive Assistant for 56k Agency, a digital marketing agency.
 Your role is to provide intelligent, actionable insights based on the user's query and available data.
+The user you are assisting is ${context.userName}. Address them in a helpful and direct manner.
 
 Today's date: ${new Date().toLocaleDateString('it-IT', { 
   weekday: 'long', 
