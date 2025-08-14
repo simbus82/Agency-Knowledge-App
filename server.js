@@ -349,7 +349,7 @@ app.get('/auth/clickup', (req, res) => {
 
   const redirectUrl = `https://app.clickup.com/api?` +
     `client_id=${process.env.CLICKUP_CLIENT_ID}` +
-    `&redirect_uri=${encodeURIComponent(process.env.FRONTEND_URL + '/callback/clickup')}`;
+    `&redirect_uri=${encodeURIComponent('http://localhost:3000/callback/clickup')}`;
 
   res.redirect(redirectUrl);
 });
