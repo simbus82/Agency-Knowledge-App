@@ -236,3 +236,130 @@ function showToast(message, type = 'info') {
         toast.remove();
     }, 3000);
 }
+
+// =============================
+// Admin Settings UI Logic
+// =============================
+
+(function(){
+    // Map form element IDs to config keys
+    const map = {
+        FRONTEND_URL: 'frontend_url',
+        DRIVE_MAX_BYTES: 'drive_max_bytes',
+        DRIVE_CACHE_TTL: 'drive_cache_ttl',
+        CLICKUP_CACHE_TTL: 'clickup_cache_ttl',
+        MAX_DRIVE_FILES_TO_FETCH: 'max_drive_files',
+        MAX_CLICKUP_TASKS_ENRICH: 'max_clickup_tasks_enrich',
+        DRIVE_EXPORT_MAX_CHARS: 'drive_export_max_chars',
+        ENABLE_PDF_PARSE: 'enable_pdf_parse'
+    };
+
+    function isAdminUserLocal(){
+        try { return window.CURRENT_USER && window.CURRENT_USER.isAdmin; } catch(e){ return false; }
+    }
+
+    async function fetchAdminSettings(){
+        const msg = document.getElementById('admin-settings-msg');
+        if(msg) msg.textContent = 'Caricamento...';
+        try {
+            const res = await fetch('/api/config/settings', { credentials: 'include' });
+            if(!res.ok) throw new Error('Impossibile caricare');
+            const json = await res.json();
+            const settings = json.settings || {};
+            const defaults = json.defaults || {};
+            Object.keys(map).forEach(key=>{
+                const el = document.getElementById(map[key]);
+                if(!el) return;
+                if(settings.hasOwnProperty(key)) el.value = settings[key];
+                else if(defaults.hasOwnProperty(key)) el.value = defaults[key];
+            });
+            if(msg) msg.textContent = '';
+        } catch(err){
+            if(msg) msg.textContent = 'Errore caricamento impostazioni';
+            console.error(err);
+        }
+    }
+
+    function collectAdminSettings(){
+        const out = {};
+        Object.keys(map).forEach(key=>{
+            const el = document.getElementById(map[key]);
+            if(!el) return;
+            let v = el.value;
+            if(el.type === 'number') v = Number(v);
+            if(key === 'ENABLE_PDF_PARSE') v = (v === 'true' || v === true);
+            out[key] = v;
+        });
+        return out;
+    }
+
+    async function saveAdminSettings(ev){
+        if(ev) ev.preventDefault();
+        const msg = document.getElementById('admin-settings-msg');
+        if(msg) msg.textContent = 'Salvataggio...';
+        const payload = collectAdminSettings();
+        try {
+            const res = await fetch('/api/config/settings', {
+                method: 'PUT',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings: payload })
+            });
+            const json = await res.json();
+            if(res.ok && json.success){
+                if(msg) msg.textContent = 'Impostazioni salvate';
+            } else {
+                if(msg) msg.textContent = 'Salvataggio fallito';
+            }
+        } catch(err){
+            if(msg) msg.textContent = 'Errore salvataggio';
+            console.error(err);
+        }
+    }
+
+    async function restoreDefaults(ev){
+        if(ev) ev.preventDefault();
+        const msg = document.getElementById('admin-settings-msg');
+        if(msg) msg.textContent = 'Ripristino default...';
+        try {
+            const res = await fetch('/api/config/settings?action=defaults', {
+                method: 'PUT', credentials: 'include'
+            });
+            const json = await res.json();
+            if(res.ok && json.defaults){
+                Object.keys(map).forEach(key=>{
+                    const el = document.getElementById(map[key]);
+                    if(!el) return;
+                    if(json.defaults.hasOwnProperty(key)) el.value = json.defaults[key];
+                });
+                if(msg) msg.textContent = 'Default ripristinati';
+            } else {
+                if(msg) msg.textContent = 'Restore fallito';
+            }
+        } catch(err){
+            if(msg) msg.textContent = 'Errore durante il ripristino';
+            console.error(err);
+        }
+    }
+
+    // Wire on DOM ready
+    document.addEventListener('DOMContentLoaded', ()=>{
+        const admin = isAdminUserLocal();
+        const adminTabBtn = document.getElementById('tab-admin-settings');
+        const adminSection = document.getElementById('admin-settings-section');
+        if(adminTabBtn) adminTabBtn.style.display = admin ? 'inline-block' : 'none';
+        if(adminSection) adminSection.style.display = admin ? 'block' : 'none';
+        if(!admin) return;
+        const form = document.getElementById('admin-settings-form');
+        if(form) form.addEventListener('submit', saveAdminSettings);
+        const restoreBtn = document.getElementById('admin-settings-restore');
+        if(restoreBtn) restoreBtn.addEventListener('click', restoreDefaults);
+        if(adminTabBtn) adminTabBtn.addEventListener('click', ()=>{
+            const sections = document.querySelectorAll('.settings-section');
+            sections.forEach(s=> s.style.display = 'none');
+            adminSection.style.display = 'block';
+        });
+        fetchAdminSettings();
+    });
+
+})();

@@ -53,6 +53,7 @@
                 </div>
                 <div class="header-right">
                     <span class="user-info" id="userInfo"></span>
+                    <button id="tab-admin-settings" class="settings-tab-btn" style="display:none;margin-left:12px" aria-controls="admin-settings-section">Admin</button>
                 </div>
             </div>
         </div>
@@ -243,6 +244,68 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Admin Settings Section (visible only to admins) -->
+            <section id="admin-settings-section" class="settings-section" style="display:none;margin-top:18px" aria-hidden="true">
+                <h2>🔧 Impostazioni Admin</h2>
+                <p class="section-description">Impostazioni non sensibili e comportamentali dell'applicazione. Visibile solo agli amministratori.</p>
+
+                <div class="config-card">
+                    <div class="config-body">
+                        <form id="admin-settings-form">
+                            <div class="form-group">
+                                <label for="frontend_url">Frontend URL</label>
+                                <input id="frontend_url" name="FRONTEND_URL" type="url" class="form-input" />
+                            </div>
+
+                            <div class="form-group">
+                                <label for="drive_max_bytes">Drive max bytes</label>
+                                <input id="drive_max_bytes" name="DRIVE_MAX_BYTES" type="number" min="1024" class="form-input" />
+                            </div>
+
+                            <div class="form-group">
+                                <label for="drive_cache_ttl">Drive cache TTL (sec)</label>
+                                <input id="drive_cache_ttl" name="DRIVE_CACHE_TTL" type="number" min="60" class="form-input" />
+                            </div>
+
+                            <div class="form-group">
+                                <label for="clickup_cache_ttl">ClickUp cache TTL (sec)</label>
+                                <input id="clickup_cache_ttl" name="CLICKUP_CACHE_TTL" type="number" min="60" class="form-input" />
+                            </div>
+
+                            <div class="form-group">
+                                <label for="max_drive_files">Max Drive files to fetch</label>
+                                <input id="max_drive_files" name="MAX_DRIVE_FILES_TO_FETCH" type="number" min="1" max="20" class="form-input" />
+                            </div>
+
+                            <div class="form-group">
+                                <label for="max_clickup_tasks_enrich">Max ClickUp tasks to enrich</label>
+                                <input id="max_clickup_tasks_enrich" name="MAX_CLICKUP_TASKS_ENRICH" type="number" min="1" max="20" class="form-input" />
+                            </div>
+
+                            <div class="form-group">
+                                <label for="drive_export_max_chars">Drive export max chars</label>
+                                <input id="drive_export_max_chars" name="DRIVE_EXPORT_MAX_CHARS" type="number" min="1000" class="form-input" />
+                            </div>
+
+                            <div class="form-group">
+                                <label for="enable_pdf_parse">Enable PDF parse</label>
+                                <select id="enable_pdf_parse" name="ENABLE_PDF_PARSE" class="form-input">
+                                    <option value="true">True</option>
+                                    <option value="false">False</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group actions">
+                                <button type="button" id="admin-settings-restore" class="btn">Ripristina default</button>
+                                <button type="submit" id="admin-settings-save" class="btn btn-primary">Salva</button>
+                            </div>
+
+                            <div id="admin-settings-msg" role="status" aria-live="polite" class="muted" style="margin-top:8px"></div>
+                        </form>
+                    </div>
+                </div>
+            </section>
         </div>
     </div>
 

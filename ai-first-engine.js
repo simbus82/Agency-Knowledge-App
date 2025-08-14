@@ -186,6 +186,51 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
   }
 
   /**
+   * Helper to get date filter for Drive API
+   */
+  getDateFilterForDrive(dateFilter) {
+    const now = new Date();
+    let filterDate;
+
+    switch(dateFilter) {
+      case 'recent':
+      case 'week':
+        filterDate = new Date(now.setDate(now.getDate() - 7));
+        break;
+      case 'today':
+        filterDate = new Date(now.setHours(0,0,0,0));
+        break;
+      case 'month':
+        filterDate = new Date(now.setMonth(now.getMonth() - 1));
+        break;
+      default:
+        return null;
+    }
+
+    return `modifiedTime > '${filterDate.toISOString()}'`;
+  }
+
+  /**
+   * Convert milliseconds to human readable hours/minutes
+   */
+  msToHuman(ms) {
+    if (!ms || isNaN(ms)) return '0m';
+    const totalMinutes = Math.round(ms / 1000 / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return `${hours > 0 ? hours + 'h ' : ''}${minutes}m`.trim();
+  }
+
+  /**
+   * Truncate long text for AI context while preserving meaning
+   */
+  truncateText(text, maxChars = 1000) {
+    if (!text) return '';
+    if (text.length <= maxChars) return text;
+    return text.slice(0, maxChars - 3) + '...';
+  }
+
+  /**
    * Fetch ClickUp data based on AI analysis
    */
   async fetchClickUpData(analysis, context) {
@@ -259,9 +304,84 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
         params
       });
 
-      const tasks = response.data.tasks || [];
+      let tasks = response.data.tasks || [];
       console.log(`✅ Found ${tasks.length} ClickUp tasks`);
-      
+
+      // If small result set, enrich each task with detailed fields and comments
+      if (tasks.length > 0 && tasks.length <= 3) {
+        for (let i = 0; i < tasks.length; i++) {
+          const t = tasks[i];
+          try {
+            // Fetch full task details (description, time estimates, attachments, parent info, url, list/space)
+            let details = {};
+            try {
+              if (context.serverBase) {
+                const resp = await axios.get(`${context.serverBase}/api/clickup/task/${t.id}/details`, { withCredentials: true });
+                details = resp.data || {};
+              } else {
+                const detailResp = await axios.get(`https://api.clickup.com/api/v2/task/${t.id}`, {
+                  headers: { 'Authorization': context.clickupToken }
+                });
+                details = detailResp.data || {};
+              }
+            } catch (e) {
+              console.warn('Falling back to direct ClickUp details fetch', e.message || e);
+              try {
+                const detailResp = await axios.get(`https://api.clickup.com/api/v2/task/${t.id}`, {
+                  headers: { 'Authorization': context.clickupToken }
+                });
+                details = detailResp.data || {};
+              } catch (e2) {
+                details = {};
+              }
+            }
+
+            // Merge useful fields into task
+            t.description = details.description || t.description || '';
+            t.time_estimate = details.time_estimate || details.estimate || t.time_estimate || 0;
+            t.time_spent = details.time_spent || details.time_logged || t.time_spent || 0;
+            t.parent = details.parent || t.parent || null;
+            t.attachments = details.attachments || t.attachments || [];
+            t.url = details.url || t.url || details.short_url || null;
+            t.list = details.list || t.list || null;
+
+            // Fetch comments for this task (via server proxy when available)
+            try {
+              if (context.serverBase) {
+                const cResp = await axios.get(`${context.serverBase}/api/clickup/task/${t.id}/comments`, { withCredentials: true });
+                t.comments = cResp.data.comments || cResp.data?.comments || [];
+                t.comments_count = t.comments.length || cResp.data?.comments?.length || 0;
+              } else {
+                const commentsResp = await axios.get(`https://api.clickup.com/api/v2/task/${t.id}/comment`, {
+                  headers: { 'Authorization': context.clickupToken }
+                });
+                t.comments = commentsResp.data.comments || [];
+                t.comments_count = t.comments.length;
+              }
+            } catch (cErr) {
+              t.comments = t.comments || [];
+              t.comments_count = details?.comment_count || t.comments.length || 0;
+              console.warn('Could not fetch full comments for task', t.id, cErr.message || cErr);
+            }
+
+          } catch (detailErr) {
+            console.warn('Could not fetch task details for', t.id, detailErr.message || detailErr);
+          }
+        }
+      } else {
+        // For larger result sets, populate summary fields (counts) without fetching full details
+        tasks = tasks.map(t => ({
+          ...t,
+          description: t.description || '',
+          time_estimate: t.time_estimate || 0,
+          time_spent: t.time_spent || 0,
+          attachments: t.attachments || [],
+          comments_count: (t.comment_count !== undefined) ? t.comment_count : (t.comments ? t.comments.length : 0),
+          url: t.url || t.short_url || null,
+          list: t.list || null
+        }));
+      }
+
       return tasks;
       
     } catch (error) {
@@ -318,6 +438,59 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
 
       // Remove duplicates
       const uniqueResults = Array.from(new Map(allResults.map(f => [f.id, f])).values());
+
+      // If small result set, fetch comments for files
+      if (uniqueResults.length > 0 && uniqueResults.length <= 3) {
+        for (let i = 0; i < uniqueResults.length; i++) {
+          const file = uniqueResults[i];
+          try {
+            const commentsResp = await axios.get(`https://www.googleapis.com/drive/v3/files/${file.id}/comments`, {
+              headers: { 'Authorization': `Bearer ${context.googleAccessToken}` },
+              params: { fields: 'comments(author,content,createdTime)' }
+            });
+            file.comments = commentsResp.data.comments || [];
+            file.comments_count = file.comments.length;
+          } catch (cErr) {
+            // Comments may not be accessible or endpoint may fail - fallback
+            file.comments = file.comments || [];
+            file.comments_count = file.comments.length || 0;
+            console.warn('Could not fetch Drive comments for file', file.id, cErr.message || cErr);
+          }
+          // Fetch textual content for Google-native files when results are few
+          try {
+            if (context.serverBase) {
+              const contentResp = await axios.get(`${context.serverBase}/api/drive/file/${file.id}/content`, { withCredentials: true });
+              file.contentText = contentResp.data.contentText || null;
+            } else {
+              // Fallback: try exporting directly using user's access token
+              try {
+                const expResp = await axios.get(`https://www.googleapis.com/drive/v3/files/${file.id}/export`, {
+                  headers: { 'Authorization': `Bearer ${context.googleAccessToken}` },
+                  params: { mimeType: 'text/plain' },
+                  responseType: 'text'
+                });
+                file.contentText = expResp.data || null;
+              } catch (expErr) {
+                file.contentText = null;
+              }
+            }
+            // Truncate large content to avoid huge prompts
+            if (file.contentText && file.contentText.length > 20000) {
+              file.contentText = file.contentText.slice(0, 20000) + '\n...truncated...';
+            }
+          } catch (ctErr) {
+            console.warn('Could not fetch Drive file content for', file.id, ctErr.message || ctErr);
+            file.contentText = file.contentText || null;
+          }
+        }
+      } else {
+        // Populate comment counts if present, otherwise leave undefined
+        uniqueResults.forEach(f => {
+          f.comments = f.comments || [];
+          f.comments_count = f.comments.length || 0;
+        });
+      }
+
       console.log(`✅ Found ${uniqueResults.length} Drive documents`);
       
       return uniqueResults;
@@ -326,31 +499,6 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
       console.error('Drive fetch error:', error.response?.data || error.message);
       return null;
     }
-  }
-
-  /**
-   * Helper to get date filter for Drive API
-   */
-  getDateFilterForDrive(dateFilter) {
-    const now = new Date();
-    let filterDate;
-
-    switch(dateFilter) {
-      case 'recent':
-      case 'week':
-        filterDate = new Date(now.setDate(now.getDate() - 7));
-        break;
-      case 'today':
-        filterDate = new Date(now.setHours(0,0,0,0));
-        break;
-      case 'month':
-        filterDate = new Date(now.setMonth(now.getMonth() - 1));
-        break;
-      default:
-        return null;
-    }
-
-    return `modifiedTime > '${filterDate.toISOString()}'`;
   }
 
   /**
@@ -457,14 +605,35 @@ Respond now as the 56k Agency AI Executive Assistant:`;
       // Calculate if overdue
       const isOverdue = task.due_date && parseInt(task.due_date) < Date.now();
       const overdueFlag = isOverdue ? ' [OVERDUE]' : '';
-      
+
+      const description = this.truncateText(task.description || '', 800);
+
+      const timeEstimate = this.msToHuman(task.time_estimate);
+      const timeSpent = this.msToHuman(task.time_spent);
+
+      const attachmentsCount = task.attachments ? task.attachments.length : 0;
+      const commentsInfo = (task.comments && task.comments.length > 0)
+        ? `Comments loaded: ${task.comments.length}`
+        : `Comments: ${task.comments_count || 0} (details not loaded)`;
+
+      const parentInfo = task.parent ? `Parent Task ID: ${task.parent}` : '';
+      const url = task.url || task.short_url || 'N/A';
+      const listName = task.list?.name || 'N/A';
+
       return `Task: ${task.name}${overdueFlag}
   Status: ${status}
   Due: ${dueDate}
   Assignees: ${assignees}
   Priority: ${priority}
-  Project: ${task.project?.name || task.list?.name || task.space?.name || 'N/A'}
-  Tags: ${task.tags?.map(t => t.name).join(', ') || 'None'}`;
+  Project: ${task.project?.name || listName || task.space?.name || 'N/A'}
+  List: ${listName}
+  URL: ${url}
+  Description: ${description}
+  Time Estimated: ${timeEstimate}
+  Time Tracked: ${timeSpent}
+  Attachments: ${attachmentsCount}
+  ${parentInfo}
+  ${commentsInfo}`;
     }).join('\n---\n');
   }
 
@@ -476,13 +645,18 @@ Respond now as the 56k Agency AI Executive Assistant:`;
       const modDate = new Date(file.modifiedTime).toLocaleDateString('it-IT');
       const owner = file.owners?.[0]?.displayName || 'Unknown';
       const size = file.size ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : 'N/A';
+
+      const commentsInfo = (file.comments && file.comments.length > 0)
+        ? `Comments loaded: ${file.comments.map(c => `${c.author?.displayName || c.author?.email || 'unknown'}: ${this.truncateText(c.content || c.htmlContent || '', 200)}`).join('\n  --\n')}`
+        : `Comments: ${file.comments_count || 0} (details not loaded)`;
       
       return `Document: ${file.name}
   Type: ${this.getFileTypeDescription(file.mimeType)}
   Modified: ${modDate}
   Owner: ${owner}
   Size: ${size}
-  Link: ${file.webViewLink}`;
+  Link: ${file.webViewLink}
+  ${commentsInfo}`;
     }).join('\n---\n');
   }
 

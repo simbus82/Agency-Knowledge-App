@@ -4,9 +4,15 @@ const cors = require('cors');
 const session = require('express-session');
 const axios = require('axios');
 const { OAuth2Client } = require('google-auth-library');
+const crypto = require('crypto');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
+const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
+const ExcelJS = require('exceljs');
+const unzipper = require('unzipper');
+const xml2js = require('xml2js');
 require('dotenv').config();
 
 // Import AI-First Engine - Let Claude handle ALL the intelligence
@@ -69,6 +75,35 @@ db.serialize(() => {
     selected_claude_model TEXT DEFAULT 'claude-sonnet-4-20250514',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+
+  // add google_refresh_token column if missing (ignore errors)
+  try {
+    db.run(`ALTER TABLE users ADD COLUMN google_refresh_token TEXT`, (err) => {
+      // ignore if column exists
+    });
+  } catch (e) {
+    // ignore
+  }
+
+  // Cache table for ClickUp responses (simple read-only cache)
+  db.run(`CREATE TABLE IF NOT EXISTS clickup_cache (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  // Cache table for Drive file exports
+  db.run(`CREATE TABLE IF NOT EXISTS drive_cache (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  // Table to record token refresh errors for auditing/alerts
+  db.run(`CREATE TABLE IF NOT EXISTS token_refresh_errors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT,
+    error TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
 });
 
 // Logger
@@ -103,6 +138,242 @@ class Logger {
 }
 
 const logger = new Logger();
+
+// Max bytes to download/parse from Drive (default 10 MB)
+const DRIVE_MAX_BYTES = parseInt(process.env.DRIVE_MAX_BYTES, 10) || (10 * 1024 * 1024);
+
+// Encryption helpers for tokens
+const ENC_ALGO = 'aes-256-gcm';
+const ENC_KEY = process.env.TOKEN_ENC_KEY || null; // must be 32 bytes base64
+function encryptToken(plain) {
+  if (!ENC_KEY) return plain;
+  const key = Buffer.from(ENC_KEY, 'base64');
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(ENC_ALGO, key, iv);
+  const encrypted = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, encrypted]).toString('base64');
+}
+
+function decryptToken(enc) {
+  if (!ENC_KEY) return enc;
+  try {
+    const key = Buffer.from(ENC_KEY, 'base64');
+    const data = Buffer.from(enc, 'base64');
+    const iv = data.slice(0, 12);
+    const tag = data.slice(12, 28);
+    const encrypted = data.slice(28);
+    const decipher = crypto.createDecipheriv(ENC_ALGO, key, iv);
+    decipher.setAuthTag(tag);
+    const out = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    return out.toString('utf8');
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Helper: getCachedOrFetch using sqlite as cache store
+ * key: string cache key
+ * ttlSeconds: time-to-live in seconds
+ * fetchFn: async function that returns data to cache
+ */
+function getCachedOrFetch(key, ttlSeconds, fetchFn) {
+  return new Promise((resolve, reject) => {
+    db.get('SELECT value, updated_at FROM clickup_cache WHERE key = ?', [key], async (err, row) => {
+      if (err) return reject(err);
+
+      const now = Date.now();
+      if (row && row.updated_at) {
+        const updated = new Date(row.updated_at).getTime();
+        if ((now - updated) < (ttlSeconds * 1000)) {
+          try {
+            return resolve(JSON.parse(row.value));
+          } catch (e) {
+            // fall through to fetch
+          }
+        }
+      }
+
+      try {
+        const fresh = await fetchFn();
+        const value = JSON.stringify(fresh);
+        const updated_at = new Date().toISOString();
+        db.run('INSERT OR REPLACE INTO clickup_cache (key, value, updated_at) VALUES (?,?,?)', [key, value, updated_at], (e) => {
+          if (e) logger.error('Failed to write cache', e);
+        });
+        return resolve(fresh);
+      } catch (fetchErr) {
+        // On fetch error, return stale cache if present
+        if (row && row.value) {
+          try { return resolve(JSON.parse(row.value)); } catch (e) { /* ignore */ }
+        }
+        return reject(fetchErr);
+      }
+    });
+  });
+}
+
+// Helper to get current user's Google access token
+async function getUserGoogleToken(req) {
+  if (!req.session.user) throw new Error('Not authenticated');
+  return new Promise((resolve, reject) => {
+    db.get('SELECT google_access_token FROM users WHERE email = ?', [req.session.user.email], (err, row) => {
+      if (err) return reject(err);
+      // Prefer session token if present
+      resolve(req.session.user.googleAccessToken || row?.google_access_token || null);
+    });
+  });
+}
+
+// Fetch (and cache) exported text content for Google-native files
+async function fetchDriveFileContentWithCache(fileId, accessToken) {
+  const cacheKey = `user:drive:file:${fileId}`;
+  return getCachedOrFetch(cacheKey, 600, async () => {
+    // First, get metadata (size, mimeType, name) to enforce size limits
+    let meta = {};
+    try {
+      const metaResp = await axios.get(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params: { fields: 'mimeType, name, size' }
+      });
+      meta = metaResp.data || {};
+    } catch (me) {
+      meta = {};
+    }
+
+    const size = parseInt(meta.size || '0', 10) || 0;
+    if (size > DRIVE_MAX_BYTES) {
+      return { contentText: null, info: { error: 'file_too_large', size } };
+    }
+
+    // Try to export as plain text for Google-native files
+    try {
+      const resp = await axios.get(`https://www.googleapis.com/drive/v3/files/${fileId}/export`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params: { mimeType: 'text/plain' },
+        responseType: 'text'
+      });
+      return { contentText: resp.data };
+    } catch (e) {
+      // Fallback: download file binary and try to parse based on mimeType
+      const resp2 = await axios.get(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params: { alt: 'media' },
+        responseType: 'arraybuffer'
+      });
+      const buffer = Buffer.from(resp2.data);
+
+      const mime = meta.mimeType || '';
+
+      // PDF
+      if (mime === 'application/pdf' || buffer.slice(0,4).toString('hex') === '25504446') {
+        try {
+          const data = await pdfParse(buffer);
+          return { contentText: data.text };
+        } catch (pe) {
+          return { contentText: null, info: { parsed: false } };
+        }
+      }
+
+      // DOCX (Office Open XML) - parse using mammoth or unzip + xml
+      if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || meta.name?.endsWith('.docx')) {
+        try {
+          const result = await mammoth.extractRawText({ buffer });
+          return { contentText: result.value };
+        } catch (me) {
+          // try unzip + xml parsing fallback
+          try {
+            const entries = await unzipper.Open.buffer(buffer);
+            const doc = entries.files.find(f => f.path === 'word/document.xml');
+            if (doc) {
+              const content = await doc.buffer();
+              const xml = content.toString('utf8');
+              const parsed = await xml2js.parseStringPromise(xml);
+              // Extract text nodes
+              let text = '';
+              const extractText = (node) => {
+                if (typeof node === 'string') text += node + ' ';
+                if (Array.isArray(node)) node.forEach(extractText);
+                if (typeof node === 'object') Object.values(node).forEach(extractText);
+              };
+              extractText(parsed);
+              return { contentText: text };
+            }
+          } catch (ue) {
+            return { contentText: null, info: { parsed: false } };
+          }
+        }
+      }
+
+      // XLSX - try to read cells as CSV-ish
+      if (mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || meta.name?.endsWith('.xlsx')) {
+        try {
+          const workbook = new ExcelJS.Workbook();
+          await workbook.xlsx.load(buffer);
+          let csv = '';
+          workbook.eachSheet((sheet) => {
+            csv += `Sheet: ${sheet.name}\n`;
+            sheet.eachRow((row) => {
+              csv += row.values.slice(1).join('\t') + '\n';
+            });
+            csv += '\n';
+          });
+          return { contentText: csv };
+        } catch (xe) {
+          return { contentText: null, info: { parsed: false } };
+        }
+      }
+
+      // PPTX - extract text from slides (basic)
+      if (mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' || meta.name?.endsWith('.pptx')) {
+        try {
+          const entries = await unzipper.Open.buffer(buffer);
+          const texts = [];
+          for (const f of entries.files) {
+            if (f.path.startsWith('ppt/slides/slide') && f.path.endsWith('.xml')) {
+              const b = await f.buffer();
+              const xml = b.toString('utf8');
+              const parsed = await xml2js.parseStringPromise(xml);
+              const extractText = (node) => {
+                let out = '';
+                if (typeof node === 'string') out += node + ' ';
+                if (Array.isArray(node)) node.forEach(n => out += extractText(n));
+                if (typeof node === 'object') Object.values(node).forEach(n => out += extractText(n));
+                return out;
+              };
+              texts.push(extractText(parsed));
+            }
+          }
+          return { contentText: texts.join('\n---\n') };
+        } catch (pe) {
+          return { contentText: null, info: { parsed: false } };
+        }
+      }
+
+      // Unknown binary - return size info
+      return { contentText: null, info: { size: buffer.length } };
+    }
+  });
+}
+
+// Endpoint: export Drive file content (Google-native) - returns truncated contentText
+app.get('/api/drive/file/:fileId/content', async (req, res) => {
+  try {
+    const token = await getUserGoogleToken(req);
+    if (!token) return res.status(400).json({ error: 'Google not connected' });
+    const { fileId } = req.params;
+    const data = await fetchDriveFileContentWithCache(fileId, token);
+    // Truncate to safe size
+    if (data.contentText && data.contentText.length > 100000) {
+      data.contentText = data.contentText.slice(0, 100000) + '\n...truncated...';
+    }
+    res.json(data);
+  } catch (error) {
+    logger.error('Drive file content export error', error.message || error);
+    res.status(500).json({ error: 'Failed to export Drive file content' });
+  }
+});
 
 // ============= CONFIGURATION ENDPOINTS =============
 
@@ -241,6 +512,105 @@ app.get('/api/claude/models', (req, res) => {
   res.json(models);
 });
 
+// Get and update admin-visible settings (safe, non-sensitive)
+app.get('/api/config/settings', (req, res) => {
+  // Provide current safe settings and defaults
+  const settings = {
+    FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:8080',
+    ALLOWED_DOMAIN: process.env.ALLOWED_DOMAIN || '56k.agency',
+    DRIVE_MAX_BYTES: Number(process.env.DRIVE_MAX_BYTES || 10485760),
+    DRIVE_CACHE_TTL: Number(process.env.DRIVE_CACHE_TTL || 600),
+    CLICKUP_CACHE_TTL: Number(process.env.CLICKUP_CACHE_TTL || 3600),
+    MAX_DRIVE_FILES_TO_FETCH: Number(process.env.MAX_DRIVE_FILES_TO_FETCH || 3),
+    MAX_CLICKUP_TASKS_ENRICH: Number(process.env.MAX_CLICKUP_TASKS_ENRICH || 3),
+    DRIVE_EXPORT_MAX_CHARS: Number(process.env.DRIVE_EXPORT_MAX_CHARS || 20000),
+    ENABLE_PDF_PARSE: (process.env.ENABLE_PDF_PARSE || 'true') === 'true'
+  };
+
+  const defaults = { ...settings };
+
+  res.json({ settings, defaults });
+});
+
+function isAdminRequest(req){
+  // Primary check: explicit ADMIN_EMAIL env var
+  try {
+    if(req.session && req.session.user && process.env.ADMIN_EMAIL){
+      return req.session.user.email === process.env.ADMIN_EMAIL;
+    }
+    // Fallback: allow users from allowed domain (not strict admin, but practical)
+    if(req.session && req.session.user && process.env.ALLOWED_DOMAIN){
+      const domain = req.session.user.email.split('@').pop();
+      return domain === process.env.ALLOWED_DOMAIN;
+    }
+  } catch(e){
+    return false;
+  }
+  return false;
+}
+
+// Update admin settings or restore defaults
+app.put('/api/config/settings', (req, res) => {
+  if(!isAdminRequest(req)) return res.status(403).json({ error: 'Admin required' });
+
+  const { settings, restoreDefaults } = req.body || {};
+
+  try {
+    // If restoreDefaults requested, clear specific env keys to defaults
+    const envPath = '.env';
+    const existingEnv = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+    const envConfig = require('dotenv').parse(existingEnv || '');
+
+    const editableKeys = [
+      'FRONTEND_URL','ALLOWED_DOMAIN','DRIVE_MAX_BYTES','DRIVE_CACHE_TTL',
+      'CLICKUP_CACHE_TTL','MAX_DRIVE_FILES_TO_FETCH','MAX_CLICKUP_TASKS_ENRICH',
+      'DRIVE_EXPORT_MAX_CHARS','ENABLE_PDF_PARSE'
+    ];
+
+    const newConfig = { ...envConfig };
+
+    if(restoreDefaults){
+      // remove editable keys to fallback to code defaults
+      editableKeys.forEach(k => delete newConfig[k]);
+    }
+
+    if(settings && typeof settings === 'object'){
+      // validate and apply only editableKeys
+      editableKeys.forEach(k => {
+        if(settings.hasOwnProperty(k)){
+          newConfig[k] = String(settings[k]);
+        }
+      });
+    }
+
+    // Ensure SESSION_SECRET remains
+    if(!newConfig.SESSION_SECRET) newConfig.SESSION_SECRET = generateSecret();
+
+    // Persist to .env
+    const envContent = Object.entries(newConfig).map(([key,val]) => `${key}=${val}`).join('\n');
+    fs.writeFileSync(envPath, envContent);
+
+    // Update process.env in-memory
+    Object.assign(process.env, newConfig);
+
+    res.json({ success: true, defaults: {
+      FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:8080',
+      ALLOWED_DOMAIN: process.env.ALLOWED_DOMAIN || '56k.agency',
+      DRIVE_MAX_BYTES: Number(process.env.DRIVE_MAX_BYTES || 10485760),
+      DRIVE_CACHE_TTL: Number(process.env.DRIVE_CACHE_TTL || 600),
+      CLICKUP_CACHE_TTL: Number(process.env.CLICKUP_CACHE_TTL || 3600),
+      MAX_DRIVE_FILES_TO_FETCH: Number(process.env.MAX_DRIVE_FILES_TO_FETCH || 3),
+      MAX_CLICKUP_TASKS_ENRICH: Number(process.env.MAX_CLICKUP_TASKS_ENRICH || 3),
+      DRIVE_EXPORT_MAX_CHARS: Number(process.env.DRIVE_EXPORT_MAX_CHARS || 20000),
+      ENABLE_PDF_PARSE: (process.env.ENABLE_PDF_PARSE || 'true') === 'true'
+    } });
+
+  } catch (err){
+    logger.error('Failed to update settings', err);
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
 // Test API connections
 app.post('/api/test/connection', async (req, res) => {
   const { service, credentials } = req.body;
@@ -283,7 +653,7 @@ app.get('/auth/google', (req, res) => {
     `client_id=${process.env.GOOGLE_CLIENT_ID}` +
     `&redirect_uri=${encodeURIComponent('http://localhost:3000/callback/google')}` +
     `&response_type=code` +
-    `&scope=${encodeURIComponent('email profile https://www.googleapis.com/auth/drive.readonly')}` +
+  `&scope=${encodeURIComponent('email profile https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.metadata.readonly https://www.googleapis.com/auth/drive.activity.readonly')}` +
     `&access_type=offline` +
     `&prompt=consent`;
 
@@ -333,6 +703,14 @@ app.get('/callback/google', async (req, res) => {
       googleAccessToken: access_token,
       googleRefreshToken: refresh_token
     };
+
+    // Persist encrypted refresh token in DB (if present)
+    if (refresh_token) {
+      const enc = encryptToken(refresh_token);
+      db.run('UPDATE users SET google_refresh_token = ? WHERE email = ?', [enc, user.email], (err) => {
+        if (err) logger.error('Failed to save refresh token', err);
+      });
+    }
 
     logger.info('User logged in', { email: user.email });
 
@@ -498,6 +876,166 @@ app.post('/api/claude/message', async (req, res) => {
 });
 
 // ClickUp API proxy
+
+// Helper to get current user's ClickUp token from DB/session
+async function getUserClickUpToken(req) {
+  if (!req.session.user) throw new Error('Not authenticated');
+  return new Promise((resolve, reject) => {
+    db.get('SELECT clickup_token FROM users WHERE email = ?', [req.session.user.email], (err, row) => {
+      if (err) return reject(err);
+      resolve(row?.clickup_token || req.session.user.clickupToken || null);
+    });
+  });
+}
+
+// Replace getUserGoogleToken to support refresh token flow
+async function getUserGoogleToken(req) {
+  if (!req.session.user) throw new Error('Not authenticated');
+  // prefer session token if valid
+  if (req.session.user.googleAccessToken) return req.session.user.googleAccessToken;
+
+  // otherwise try to obtain a new access token using refresh token from DB
+  return new Promise((resolve, reject) => {
+    db.get('SELECT google_refresh_token FROM users WHERE email = ?', [req.session.user.email], async (err, row) => {
+      if (err) return reject(err);
+      const enc = row?.google_refresh_token;
+      if (!enc) return resolve(null);
+      const refreshToken = decryptToken(enc) || enc;
+      if (!refreshToken) return resolve(null);
+
+      try {
+        const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, 'http://localhost:3000/callback/google');
+        const r = await client.getToken({ refresh_token: refreshToken });
+        const tokens = r.tokens;
+        // save new access token to session
+        req.session.user.googleAccessToken = tokens.access_token;
+        // update refresh token if provided
+        if (tokens.refresh_token) {
+          const newEnc = encryptToken(tokens.refresh_token);
+          db.run('UPDATE users SET google_refresh_token = ? WHERE email = ?', [newEnc, req.session.user.email], (e) => {
+            if (e) logger.error('Failed to update refresh token', e);
+          });
+        }
+        resolve(tokens.access_token);
+      } catch (e) {
+        logger.error('Failed to refresh Google token', e.message || e);
+        // record error for auditing
+        try {
+          db.run('INSERT INTO token_refresh_errors (email, error) VALUES (?, ?)', [req.session.user.email, (e.message || JSON.stringify(e))]);
+        } catch (ie) { logger.error('Failed to write token refresh error', ie); }
+        // if refresh fails, clear stored token
+        db.run('UPDATE users SET google_refresh_token = NULL WHERE email = ?', [req.session.user.email]);
+        resolve(null);
+      }
+    });
+  });
+}
+
+// List ClickUp spaces for the current user's team (cached)
+app.get('/api/clickup/spaces', async (req, res) => {
+  try {
+    const token = await getUserClickUpToken(req);
+    if (!token) return res.status(400).json({ error: 'ClickUp not connected' });
+
+    // use teamId from session or try to derive
+    const teamId = req.query.teamId || process.env.CLICKUP_TEAM_ID;
+    if (!teamId) return res.status(400).json({ error: 'No teamId provided' });
+
+    const cacheKey = `user:${req.session.user.email}:clickup:spaces:${teamId}`;
+    const data = await getCachedOrFetch(cacheKey, 3600, async () => {
+      const resp = await axios.get(`https://api.clickup.com/api/v2/team/${teamId}/space`, {
+        headers: { 'Authorization': token }
+      });
+      return resp.data;
+    });
+
+    res.json(data);
+  } catch (error) {
+    logger.error('ClickUp spaces proxy error', error.message || error);
+    res.status(500).json({ error: 'Failed to fetch ClickUp spaces' });
+  }
+});
+
+// List folders in a space
+app.get('/api/clickup/spaces/:spaceId/folders', async (req, res) => {
+  try {
+    const token = await getUserClickUpToken(req);
+    if (!token) return res.status(400).json({ error: 'ClickUp not connected' });
+    const { spaceId } = req.params;
+    const cacheKey = `user:${req.session.user.email}:clickup:folders:${spaceId}`;
+    const data = await getCachedOrFetch(cacheKey, 3600, async () => {
+      const resp = await axios.get(`https://api.clickup.com/api/v2/space/${spaceId}/folder`, {
+        headers: { 'Authorization': token }
+      });
+      return resp.data;
+    });
+    res.json(data);
+  } catch (error) {
+    logger.error('ClickUp folders proxy error', error.message || error);
+    res.status(500).json({ error: 'Failed to fetch ClickUp folders' });
+  }
+});
+
+// List lists in a folder
+app.get('/api/clickup/folders/:folderId/lists', async (req, res) => {
+  try {
+    const token = await getUserClickUpToken(req);
+    if (!token) return res.status(400).json({ error: 'ClickUp not connected' });
+    const { folderId } = req.params;
+    const cacheKey = `user:${req.session.user.email}:clickup:lists:${folderId}`;
+    const data = await getCachedOrFetch(cacheKey, 3600, async () => {
+      const resp = await axios.get(`https://api.clickup.com/api/v2/folder/${folderId}/list`, {
+        headers: { 'Authorization': token }
+      });
+      return resp.data;
+    });
+    res.json(data);
+  } catch (error) {
+    logger.error('ClickUp lists proxy error', error.message || error);
+    res.status(500).json({ error: 'Failed to fetch ClickUp lists' });
+  }
+});
+
+// Task details (on-demand, cached)
+app.get('/api/clickup/task/:taskId/details', async (req, res) => {
+  try {
+    const token = await getUserClickUpToken(req);
+    if (!token) return res.status(400).json({ error: 'ClickUp not connected' });
+    const { taskId } = req.params;
+    const cacheKey = `user:${req.session.user.email}:clickup:task:${taskId}:details`;
+    const data = await getCachedOrFetch(cacheKey, 600, async () => {
+      const resp = await axios.get(`https://api.clickup.com/api/v2/task/${taskId}`, {
+        headers: { 'Authorization': token }
+      });
+      return resp.data;
+    });
+    res.json(data);
+  } catch (error) {
+    logger.error('ClickUp task details proxy error', error.message || error);
+    res.status(500).json({ error: 'Failed to fetch ClickUp task details' });
+  }
+});
+
+// Task comments (on-demand, cached)
+app.get('/api/clickup/task/:taskId/comments', async (req, res) => {
+  try {
+    const token = await getUserClickUpToken(req);
+    if (!token) return res.status(400).json({ error: 'ClickUp not connected' });
+    const { taskId } = req.params;
+    const cacheKey = `user:${req.session.user.email}:clickup:task:${taskId}:comments`;
+    const data = await getCachedOrFetch(cacheKey, 300, async () => {
+      const resp = await axios.get(`https://api.clickup.com/api/v2/task/${taskId}/comment`, {
+        headers: { 'Authorization': token }
+      });
+      return resp.data;
+    });
+    res.json(data);
+  } catch (error) {
+    logger.error('ClickUp task comments proxy error', error.message || error);
+    res.status(500).json({ error: 'Failed to fetch ClickUp task comments' });
+  }
+});
+
 app.get('/api/clickup/*', async (req, res) => {
   if (!req.session.user || !req.session.user.clickupToken) {
     return res.status(401).json({ error: 'ClickUp not connected' });
