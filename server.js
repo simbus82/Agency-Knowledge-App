@@ -252,6 +252,9 @@ app.post('/api/test/connection', async (req, res) => {
       case 'claude':
         result = await testClaudeAPI(credentials.apiKey);
         break;
+      case 'database':
+        result = await testDatabase();
+        break;
       case 'clickup':
         result = await testClickUpAPI(credentials.clientId, credentials.clientSecret);
         break;
@@ -688,6 +691,31 @@ async function testClickUpAPI(clientId, clientSecret) {
   return { success: false, error: 'Missing credentials' };
 }
 
+async function testDatabase() {
+  return new Promise((resolve) => {
+    // Simple query to verify database is reachable and writable
+    db.get("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1", (err, row) => {
+      if (err) return resolve({ success: false, error: err.message });
+      // also try a transient write to ensure writable
+      try {
+        const key = 'health_check_' + Date.now();
+        db.run("INSERT INTO configuration (key, value) VALUES (?, ?)", [key, 'ok'], (insertErr) => {
+          if (insertErr) {
+            return resolve({ success: false, error: insertErr.message });
+          }
+          // cleanup
+          db.run("DELETE FROM configuration WHERE key = ?", [key], (delErr) => {
+            if (delErr) return resolve({ success: false, error: delErr.message });
+            return resolve({ success: true });
+          });
+        });
+      } catch (e) {
+        return resolve({ success: false, error: e.message });
+      }
+    });
+  });
+}
+
 function generateSecret() {
   return require('crypto').randomBytes(32).toString('hex');
 }
@@ -699,16 +727,25 @@ app.use(express.static('public'));
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    services: {
+  (async () => {
+    const dbTest = await testDatabase();
+    const services = {
       claude: !!process.env.CLAUDE_API_KEY,
       google: !!process.env.GOOGLE_CLIENT_ID,
       clickup: !!process.env.CLICKUP_CLIENT_ID,
-      database: true
-    },
-    timestamp: new Date().toISOString()
-  });
+      database: !!dbTest.success
+    };
+
+    const errors = {};
+    if (!dbTest.success) errors.database = dbTest.error;
+
+    res.json({
+      status: Object.values(services).every(Boolean) ? 'healthy' : 'degraded',
+      services,
+      errors,
+      timestamp: new Date().toISOString()
+    });
+  })();
 });
 
 app.listen(PORT, () => {

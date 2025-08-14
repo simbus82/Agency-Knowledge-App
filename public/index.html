@@ -35,9 +35,47 @@
                 <select class="model-selector" id="modelSelector" onchange="changeModel()">
                     <!-- Populated dynamically -->
                 </select>
-                <div class="connection-status">
-                    <div class="status-dot" id="connectionStatus"></div>
-                    <span id="connectionText">Connesso</span>
+                <div class="services-status" aria-hidden="false">
+                    <div class="service-status" id="service-ai">
+                        <div class="service-dot status-dot" id="status-ai" title="AI (Claude)"></div>
+                        <div class="service-label" id="label-ai">AI</div>
+                        <button class="service-check-btn" onclick="checkServiceNow('claude')" title="Verifica ora">Verifica</button>
+                        <div class="service-meta" id="meta-ai" aria-hidden="true">
+                            <div class="meta-last" id="meta-ai-last">Ultimo controllo: -</div>
+                            <div class="meta-error" id="meta-ai-error" style="display:none;">Errore: <span></span></div>
+                        </div>
+                    </div>
+                    <div class="service-status" id="service-drive">
+                        <div class="service-dot status-dot" id="status-drive" title="Google Drive"></div>
+                        <div class="service-label" id="label-drive">Drive</div>
+                        <button class="service-check-btn" onclick="checkServiceNow('google')" title="Verifica ora">Verifica</button>
+                        <div class="service-meta" id="meta-drive" aria-hidden="true">
+                            <div class="meta-last" id="meta-drive-last">Ultimo controllo: -</div>
+                            <div class="meta-error" id="meta-drive-error" style="display:none;">Errore: <span></span></div>
+                        </div>
+                    </div>
+                    <div class="service-status" id="service-clickup">
+                        <div class="service-dot status-dot" id="status-clickup" title="ClickUp"></div>
+                        <div class="service-label" id="label-clickup">ClickUp</div>
+                        <button class="service-check-btn" onclick="checkServiceNow('clickup')" title="Verifica ora">Verifica</button>
+                        <div class="service-meta" id="meta-clickup" aria-hidden="true">
+                            <div class="meta-last" id="meta-clickup-last">Ultimo controllo: -</div>
+                            <div class="meta-error" id="meta-clickup-error" style="display:none;">Errore: <span></span></div>
+                        </div>
+                    </div>
+                    <div class="service-status" id="service-db">
+                        <div class="service-dot status-dot" id="status-db" title="Database"></div>
+                        <div class="service-label" id="label-db">DB</div>
+                        <button class="service-check-btn" onclick="checkServiceNow('database')" title="Verifica ora">Verifica</button>
+                        <div class="service-meta" id="meta-db" aria-hidden="true">
+                            <div class="meta-last" id="meta-db-last">Ultimo controllo: -</div>
+                            <div class="meta-error" id="meta-db-error" style="display:none;">Errore: <span></span></div>
+                        </div>
+                    </div>
+                    <div class="connection-status" role="status" aria-live="polite">
+                        <div class="status-dot" id="connectionStatus"></div>
+                        <span id="connectionText">Connesso</span>
+                    </div>
                 </div>
                 <div class="user-menu">
                     <button class="user-button" onclick="toggleUserMenu()">
@@ -151,5 +189,17 @@
     <script src="js/markdown.js"></script>
     <script src="js/ui.js"></script>
     <script src="js/app.js"></script>
+
+    <!-- Google OAuth Confirmation Modal -->
+    <div id="oauthModal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h3>Collegamento Google</h3>
+            <p>Verrai reindirizzato al flusso di autenticazione Google. Continuare?</p>
+            <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px;">
+                <button onclick="closeOauthModal()" class="btn btn-secondary">Annulla</button>
+                <button onclick="confirmOauthGoogle()" class="btn btn-primary">Continua</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

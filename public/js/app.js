@@ -249,11 +249,11 @@ async function sendMessage() {
         // Remove typing indicator
         UIManager.removeTypingIndicator();
         
-        // Add AI response with markdown rendering
-        UIManager.addMessage('ai', data.content[0].text);
-        
-        // Save conversation
-        await this.saveConversation();
+    // Add AI response with markdown rendering
+    UIManager.addMessage('ai', data.content[0].text);
+
+    // Save conversation (call explicit function to avoid reliance on `this` scope)
+    await saveConversation();
         
     } catch (error) {
         console.error('Message send error:', error);
@@ -405,7 +405,8 @@ function connectClickUp() {
 }
 
 function openSettings() {
-    window.location.href = `${CONFIG.API_BASE}/config`;
+    // Open the frontend settings page
+    window.location.href = '/settings.html';
 }
 
 function logout() {

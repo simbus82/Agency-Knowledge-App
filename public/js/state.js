@@ -24,10 +24,14 @@ let state = {
     connections: {
         claude: false,
         clickup: false,
-        drive: false,
-        server: false
+    drive: false,
+    server: false,
+    database: false
     }
 };
+
+// Per-service metadata (timestamps, errors, attempts)
+state.serviceMeta = {};
 
 // State management functions
 const StateManager = {
@@ -126,6 +130,19 @@ const StateManager = {
     setConnectionStatus(service, status) {
         state.connections[service] = status;
         this.notifyStateChange();
+    },
+
+    // Service metadata helpers
+    setServiceMeta(service, meta) {
+        state.serviceMeta[service] = {
+            ...(state.serviceMeta[service] || {}),
+            ...meta
+        };
+        this.notifyStateChange();
+    },
+
+    getServiceMeta(service) {
+        return state.serviceMeta[service] || null;
     },
 
     // UI helpers
