@@ -42,7 +42,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/Agency-knowledge-hub.git
+git clone https://github.com/simbus82/Agency-knowledge-hub.git
 cd Agency-knowledge-hub
 
 # Run the setup wizard
@@ -66,7 +66,7 @@ That's it! 🎉 The setup wizard will guide you through the configuration.
 
 ```bash
 # Download and setup
-git clone https://github.com/your-org/Agency-knowledge-hub.git
+git clone https://github.com/simbus82/Agency-knowledge-hub.git
 cd Agency-knowledge-hub
 npm run setup
 ```
@@ -412,8 +412,8 @@ in the Software without restriction...
 ### Getting Help
 
 - 📖 **Documentation**: [Full Documentation](./docs/documentation.md)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/your-org/Agency-knowledge-hub/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/your-org/Agency-knowledge-hub/discussions)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/simbus82/Agency-knowledge-hub/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/simbus82/Agency-knowledge-hub/discussions)
 - 📧 **Email**: support@Agency.agency
 
 ### Resources
@@ -450,11 +450,9 @@ in the Software without restriction...
 
 <div align="center">
 
-**Built with ❤️ by [Agency Agency](https://Agency.agency)**
+**Built with ❤️ by me**
 
-[![GitHub stars](https://img.shields.io/github/stars/your-org/Agency-knowledge-hub?style=social)](https://github.com/your-org/Agency-knowledge-hub/stargazers)
-[![Twitter Follow](https://img.shields.io/twitter/follow/Agency_agency?style=social)](https://twitter.com/Agency_agency)
-
-[⭐ Star this repo](https://github.com/your-org/Agency-knowledge-hub/stargazers) | [🐛 Report Bug](https://github.com/your-org/Agency-knowledge-hub/issues) | [✨ Request Feature](https://github.com/your-org/Agency-knowledge-hub/issues)
+[![GitHub stars](https://img.shields.io/github/stars/simbus82/Agency-knowledge-hub?style=social)](https://github.com/simbus82/Agency-knowledge-hub/stargazers)
+[⭐ Star this repo](https://github.com/simbus82/Agency-knowledge-hub/stargazers) | [🐛 Report Bug](https://github.com/simbus82/Agency-knowledge-hub/issues) | [✨ Request Feature](https://github.com/simbus82/Agency-knowledge-hub/issues)
 
 </div>
