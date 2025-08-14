@@ -547,6 +547,58 @@
     }
 }
 
+/* Copy code button */
+.copy-code-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(255, 255, 255, 0.9);
+    border: none;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    z-index: 10;
+}
+
+.markdown-content pre:hover .copy-code-btn {
+    opacity: 1;
+}
+
+.copy-code-btn:hover {
+    background: white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Custom tooltip */
+.custom-tooltip {
+    position: absolute;
+    background: var(--dark);
+    color: white;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    pointer-events: none;
+    z-index: 1000;
+    opacity: 0;
+    animation: tooltipFadeIn 0.2s ease forwards;
+}
+
+@keyframes tooltipFadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Table wrapper for responsive tables */
+.table-wrapper {
+    overflow-x: auto;
+    margin: 20px 0;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
 /* Print styles */
 @media print {
     .markdown-content {

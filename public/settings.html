@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Impostazioni - 56k Knowledge Hub</title>
+    <link rel="stylesheet" href="css/settings.css">
+    <style>
+        /* Base styles from main app */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #7C3AED;
+            --primary-dark: #6D28D9;
+            --secondary: #EC4899;
+            --success: #10B981;
+            --warning: #F59E0B;
+            --danger: #EF4444;
+            --dark: #1F2937;
+            --light: #F9FAFB;
+            --border: #E5E7EB;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div class="loading-screen" id="loadingScreen">
+        <div class="loading-logo">56k</div>
+        <div class="loading-text">Caricamento impostazioni...</div>
+        <div class="loading-spinner"></div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="settings-container" id="settingsContainer">
+        <!-- Header -->
+        <div class="settings-header">
+            <div class="header-content">
+                <div class="header-left">
+                    <button class="back-button" onclick="goBack()">
+                        <span>←</span> Torna all'app
+                    </button>
+                    <h1>Impostazioni</h1>
+                </div>
+                <div class="header-right">
+                    <span class="user-info" id="userInfo"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Content -->
+        <div class="settings-content">
+            <!-- API Configuration Section -->
+            <div class="settings-section">
+                <h2>🔑 Configurazione API</h2>
+                <p class="section-description">
+                    Gestisci le chiavi API per i servizi integrati. Le chiavi esistenti sono nascoste per sicurezza.
+                </p>
+
+                <!-- Claude API -->
+                <div class="config-card">
+                    <div class="config-header">
+                        <h3>Claude AI</h3>
+                        <span class="status-badge" id="claudeStatus">Non configurato</span>
+                    </div>
+                    <div class="config-body">
+                        <div class="form-group">
+                            <label for="claudeApiKey">API Key</label>
+                            <div class="input-with-button">
+                                <input 
+                                    type="password" 
+                                    id="claudeApiKey" 
+                                    class="form-input" 
+                                    placeholder="sk-ant-api03-..."
+                                    autocomplete="off"
+                                >
+                                <button class="test-button" onclick="testConnection('claude')">
+                                    Test
+                                </button>
+                            </div>
+                            <small class="help-text">
+                                Ottieni la tua API key da <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Google OAuth -->
+                <div class="config-card">
+                    <div class="config-header">
+                        <h3>Google OAuth</h3>
+                        <span class="status-badge" id="googleStatus">Non configurato</span>
+                    </div>
+                    <div class="config-body">
+                        <div class="form-group">
+                            <label for="googleClientId">Client ID</label>
+                            <input 
+                                type="text" 
+                                id="googleClientId" 
+                                class="form-input" 
+                                placeholder="xxxxx.apps.googleusercontent.com"
+                                autocomplete="off"
+                            >
+                        </div>
+                        <div class="form-group">
+                            <label for="googleClientSecret">Client Secret</label>
+                            <div class="input-with-button">
+                                <input 
+                                    type="password" 
+                                    id="googleClientSecret" 
+                                    class="form-input" 
+                                    placeholder="GOCSPX-..."
+                                    autocomplete="off"
+                                >
+                                <button class="test-button" onclick="testConnection('google')">
+                                    Test
+                                </button>
+                            </div>
+                            <small class="help-text">
+                                Configura OAuth in <a href="https://console.cloud.google.com" target="_blank">Google Cloud Console</a>
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ClickUp OAuth -->
+                <div class="config-card">
+                    <div class="config-header">
+                        <h3>ClickUp OAuth</h3>
+                        <span class="status-badge warning" id="clickupStatus">Opzionale</span>
+                    </div>
+                    <div class="config-body">
+                        <div class="form-group">
+                            <label for="clickupClientId">Client ID</label>
+                            <input 
+                                type="text" 
+                                id="clickupClientId" 
+                                class="form-input" 
+                                placeholder="Client ID ClickUp"
+                                autocomplete="off"
+                            >
+                        </div>
+                        <div class="form-group">
+                            <label for="clickupClientSecret">Client Secret</label>
+                            <div class="input-with-button">
+                                <input 
+                                    type="password" 
+                                    id="clickupClientSecret" 
+                                    class="form-input" 
+                                    placeholder="Client Secret ClickUp"
+                                    autocomplete="off"
+                                >
+                                <button class="test-button" onclick="testConnection('clickup')">
+                                    Test
+                                </button>
+                            </div>
+                            <small class="help-text">
+                                Crea un'app in <a href="https://app.clickup.com" target="_blank">ClickUp Settings</a>
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Save Button -->
+                <div class="action-buttons">
+                    <button class="btn btn-primary" onclick="saveConfiguration()">
+                        💾 Salva Configurazione
+                    </button>
+                </div>
+            </div>
+
+            <!-- User Preferences Section -->
+            <div class="settings-section">
+                <h2>⚙️ Preferenze Utente</h2>
+                <p class="section-description">
+                    Personalizza la tua esperienza con l'applicazione.
+                </p>
+
+                <div class="config-card">
+                    <div class="config-body">
+                        <div class="form-group">
+                            <label for="defaultModel">Modello Claude predefinito</label>
+                            <select id="defaultModel" class="form-input">
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="allowedDomain">Dominio email consentito</label>
+                            <input 
+                                type="text" 
+                                id="allowedDomain" 
+                                class="form-input" 
+                                placeholder="56k.agency"
+                                value="56k.agency"
+                            >
+                            <small class="help-text">
+                                Solo gli utenti con email @dominio potranno accedere
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Save Preferences Button -->
+                <div class="action-buttons">
+                    <button class="btn btn-secondary" onclick="savePreferences()">
+                        💾 Salva Preferenze
+                    </button>
+                </div>
+            </div>
+
+            <!-- System Info Section -->
+            <div class="settings-section">
+                <h2>📊 Informazioni Sistema</h2>
+                <div class="config-card">
+                    <div class="config-body">
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <span class="info-label">Versione:</span>
+                                <span class="info-value">1.0.0</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Database:</span>
+                                <span class="info-value" id="dbStatus">SQLite</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Server:</span>
+                                <span class="info-value" id="serverStatus">Node.js</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Ultimo backup:</span>
+                                <span class="info-value" id="lastBackup">Mai</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer"></div>
+
+    <script src="js/settings.js"></script>
+</body>
+</html>

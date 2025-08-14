@@ -138,64 +138,61 @@ app.get('/api/config/status', (req, res) => {
   });
 });
 
+// Get configuration overview (safe version for settings page)
+app.get('/api/config/overview', (req, res) => {
+  res.json({
+    claude: !!process.env.CLAUDE_API_KEY,
+    google: !!process.env.GOOGLE_CLIENT_ID && !!process.env.GOOGLE_CLIENT_SECRET,
+    clickup: !!process.env.CLICKUP_CLIENT_ID && !!process.env.CLICKUP_CLIENT_SECRET,
+    allowedDomain: process.env.ALLOWED_DOMAIN || '56k.agency'
+  });
+});
+
 // Save configuration (secure - only saves to database, not env)
 app.post('/api/config/save', async (req, res) => {
   try {
     const { config } = req.body;
     
-    // Validate required fields
-    if (!config.claude_api_key || !config.google_client_id || !config.google_client_secret) {
-      return res.status(400).json({ 
-        error: 'Missing required configuration fields' 
-      });
+    // Build the new .env content by merging existing and new values
+    const existingEnv = fs.existsSync('.env') ? fs.readFileSync('.env', 'utf-8') : '';
+    const envConfig = require('dotenv').parse(existingEnv);
+
+    const newConfig = { ...envConfig };
+
+    if (config.claude_api_key) {
+        const claudeTest = await testClaudeAPI(config.claude_api_key);
+        if (!claudeTest.success) {
+            return res.status(400).json({ 
+                error: 'Invalid Claude API key',
+                details: claudeTest.error 
+            });
+        }
+        newConfig.CLAUDE_API_KEY = config.claude_api_key;
     }
 
-    // Test Claude API
-    const claudeTest = await testClaudeAPI(config.claude_api_key);
-    if (!claudeTest.success) {
-      return res.status(400).json({ 
-        error: 'Invalid Claude API key',
-        details: claudeTest.error 
-      });
-    }
+    if (config.google_client_id) newConfig.GOOGLE_CLIENT_ID = config.google_client_id;
+    if (config.google_client_secret) newConfig.GOOGLE_CLIENT_SECRET = config.google_client_secret;
+    if (config.clickup_client_id) newConfig.CLICKUP_CLIENT_ID = config.clickup_client_id;
+    if (config.clickup_client_secret) newConfig.CLICKUP_CLIENT_SECRET = config.clickup_client_secret;
+    if (config.allowed_domain) newConfig.ALLOWED_DOMAIN = config.allowed_domain;
+    if (!newConfig.SESSION_SECRET) newConfig.SESSION_SECRET = generateSecret();
+    if (!newConfig.FRONTEND_URL) newConfig.FRONTEND_URL = 'http://localhost:8080';
 
-    // Save to environment (for current session)
-    process.env.CLAUDE_API_KEY = config.claude_api_key;
-    process.env.GOOGLE_CLIENT_ID = config.google_client_id;
-    process.env.GOOGLE_CLIENT_SECRET = config.google_client_secret;
-    
-    if (config.clickup_client_id) {
-      process.env.CLICKUP_CLIENT_ID = config.clickup_client_id;
-      process.env.CLICKUP_CLIENT_SECRET = config.clickup_client_secret;
-    }
+    // Update process.env for the current session
+    Object.assign(process.env, newConfig);
 
     // Save to .env file for persistence
-    const envContent = `
-# Claude AI Configuration
-CLAUDE_API_KEY=${config.claude_api_key}
+    const envContent = Object.entries(newConfig)
+        .map(([key, value]) => `${key}=${value}`)
+        .join('\n');
 
-# Google OAuth Configuration  
-GOOGLE_CLIENT_ID=${config.google_client_id}
-GOOGLE_CLIENT_SECRET=${config.google_client_secret}
-
-# ClickUp OAuth Configuration (Optional)
-CLICKUP_CLIENT_ID=${config.clickup_client_id || ''}
-CLICKUP_CLIENT_SECRET=${config.clickup_client_secret || ''}
-
-# Session Secret
-SESSION_SECRET=${process.env.SESSION_SECRET || generateSecret()}
-
-# Frontend URL
-FRONTEND_URL=${config.frontend_url || 'http://localhost:8080'}
-`;
-
-    fs.writeFileSync('.env', envContent.trim());
+    fs.writeFileSync('.env', envContent);
     
-    logger.info('Configuration saved successfully');
+    logger.info('Configuration updated successfully');
     
     res.json({ 
       success: true,
-      message: 'Configuration saved successfully'
+      message: 'Configuration updated successfully'
     });
 
   } catch (error) {
