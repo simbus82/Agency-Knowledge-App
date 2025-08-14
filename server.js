@@ -396,7 +396,7 @@ app.get('/callback/clickup', async (req, res) => {
 
 // ============= API PROXIES =============
 
-// Claude API proxy with intelligent context
+// AI-FIRST APPROACH: Claude API endpoint - Let AI handle ALL the intelligence
 app.post('/api/claude/message', async (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ error: 'Not authenticated' });
@@ -406,77 +406,94 @@ app.post('/api/claude/message', async (req, res) => {
     const { messages, model } = req.body;
     const userMessage = messages[messages.length - 1].content;
     
-    // Get user's selected model or use default
-    const selectedModel = model || req.session.user.selectedModel || 'claude-sonnet-4-20250514';
-
-    // Build intelligent context
-    let contextualMessages = [...messages];
-    
-    // Check if query seems to need external data
-    const needsDriveData = /documenti?|file|drive|modificat|creat|aggiorn|recen|oggi|ieri|settimana|mese/i.test(userMessage);
-    const needsClickUpData = /task|progett|clickup|scadenz|deadline|assegnat|progress|workload/i.test(userMessage);
-    let contextData = "";
-    
-    // Gather Google Drive context if needed
-    if (needsDriveData && req.session.user.googleAccessToken) {
-      try {
-        const driveContext = await getDriveContext(userMessage, req.session.user.googleAccessToken);
-        if (driveContext) {
-          contextData += `\n\n📁 DATI GOOGLE DRIVE:\n${driveContext}`;
-        }
-      } catch (error) {
-        logger.warning('Failed to get Drive context', error);
-      }
-    }
-    
-    // Gather ClickUp context if needed
-    if (needsClickUpData && req.session.user.clickupToken) {
-      try {
-        const clickupContext = await getClickUpContext(userMessage, req.session.user.clickupToken);
-        if (clickupContext) {
-          contextData += `\n\n✅ DATI CLICKUP:\n${clickupContext}`;
-        }
-      } catch (error) {
-        logger.warning('Failed to get ClickUp context', error);
-      }
-    }
-    
-    // Enhance the last message with context
-    if (contextData) {
-      const enhancedMessage = {
-        role: 'user',
-        content: `${userMessage}${contextData}\n\nRispondi alla domanda dell'utente utilizzando SOLO i dati forniti sopra. Se i dati non sono sufficienti per rispondere, dillo chiaramente.`
-      };
-      
-      // Replace the last user message with enhanced version
-      contextualMessages[contextualMessages.length - 1] = enhancedMessage;
-    }
-
-    const response = await axios.post('https://api.anthropic.com/v1/messages', {
-      model: selectedModel,
-      max_tokens: 2000,
-      temperature: 0.7,
-      messages: contextualMessages
-    }, {
-      headers: {
-        'x-api-key': process.env.CLAUDE_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json'
-      }
-    });
-
-    logger.info('Claude API call', { 
+    logger.info('Processing query with AI-First approach', { 
       user: req.session.user.email,
-      model: selectedModel,
-      tokens: response.data.usage,
-      hadContext: !!contextData
+      query: userMessage.substring(0, 100) 
     });
 
-    res.json(response.data);
+    // Initialize the AI-First Engine
+    const aiEngine = new AIFirstEngine();
+    
+    // Get ClickUp Team ID if available
+    let teamId = process.env.CLICKUP_TEAM_ID;
+    if (!teamId && req.session.user.clickupToken) {
+      // Try to fetch team ID dynamically
+      try {
+        const teamsResponse = await axios.get('https://api.clickup.com/api/v2/team', {
+          headers: { 'Authorization': req.session.user.clickupToken }
+        });
+        if (teamsResponse.data.teams?.length > 0) {
+          teamId = teamsResponse.data.teams[0].id;
+        }
+      } catch (error) {
+        logger.warning('Could not fetch ClickUp team ID', error.message);
+      }
+    }
+    
+    // Build context object with all available connections
+    const context = {
+      clickupToken: req.session.user.clickupToken || null,
+      googleAccessToken: req.session.user.googleAccessToken || null,
+      teamId: teamId || null,
+      selectedModel: model || req.session.user.selectedModel || 'claude-3-sonnet-20241022',
+      userName: req.session.user.name,
+      userEmail: req.session.user.email
+    };
+    
+    // Let the AI-First Engine handle EVERYTHING
+    // No hardcoding, no patterns, just pure AI intelligence
+    const aiResponse = await aiEngine.processQuery(userMessage, context);
+    
+    logger.info('AI-First processing complete', { 
+      user: req.session.user.email,
+      responseLength: aiResponse.length
+    });
+    
+    // Return response in the expected format
+    res.json({
+      content: [{ 
+        type: 'text', 
+        text: aiResponse 
+      }],
+      model: context.selectedModel,
+      usage: {} // We could track token usage if needed
+    });
 
   } catch (error) {
-    logger.error('Claude API error', error.response?.data || error);
-    res.status(500).json({ error: 'Claude API error' });
+    logger.error('AI-First processing error', {
+      error: error.message,
+      stack: error.stack,
+      user: req.session.user?.email
+    });
+    
+    // Fallback to basic Claude response if AI-First fails
+    try {
+      const { messages, model } = req.body;
+      const selectedModel = model || req.session.user.selectedModel || 'claude-3-sonnet-20241022';
+      
+      const fallbackResponse = await axios.post('https://api.anthropic.com/v1/messages', {
+        model: selectedModel,
+        max_tokens: 2000,
+        temperature: 0.7,
+        messages: messages
+      }, {
+        headers: {
+          'x-api-key': process.env.CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json'
+        }
+      });
+      
+      logger.info('Fallback to direct Claude API succeeded');
+      res.json(fallbackResponse.data);
+      
+    } catch (fallbackError) {
+      logger.error('Fallback Claude API also failed', fallbackError);
+      res.status(500).json({ 
+        error: 'AI processing error',
+        message: 'Mi dispiace, si è verificato un errore. Riprova tra qualche istante.'
+      });
+    }
   }
 });
 

@@ -9,6 +9,7 @@
     "frontend": "npx http-server ./public -p 8080 -c-1",
     "setup": "npm install && node setup.js",
     "test": "node test-connections.js",
+    "test:ai": "node test-ai-engine.js",
     "test:claude": "node test-connections.js --claude",
     "test:google": "node test-connections.js --google",
     "test:clickup": "node test-connections.js --clickup",
