@@ -212,6 +212,38 @@ npm run setup      # Run configuration wizard
 npm test          # Test API connections
 ```
 
+### Aggiornare l'app da GitHub su Windows (script PowerShell)
+
+Per aggiornare la copia locale su Windows preservando i dati sensibili in `.env` e il database, è stato aggiunto lo script PowerShell `update-from-github.ps1` nella radice del progetto.
+
+Passaggi rapidi:
+
+1. Apri PowerShell ed entra nella cartella del progetto:
+
+```powershell
+cd "C:\path\to\Agency-Knowledge-App"
+```
+
+2. Esegui lo script (verifica che Git e Node siano nel PATH):
+
+```powershell
+.\update-from-github.ps1
+```
+
+Cosa fa lo script:
+- crea backup `.env.backup`, `data-backup/` e `logs-backup/` nella root;
+- esegue `git stash` per salvare modifiche locali non committate;
+- fa `git fetch` + `git pull --rebase origin main` (modifica `$branch` nello script se usi un ramo diverso);
+- ripristina `.env` dal backup se presente e reinstalla le dipendenze (`npm ci` / `npm install`);
+- opzionalmente esegue build/test se definiti.
+
+Note importanti:
+- Controlla il contenuto di `.env.backup` prima di rimuoverlo; lo script non cancella automaticamente il backup finale.
+- Se preferisci usare WSL o Git Bash, puoi eseguire lo script shell `update-from-github.sh` (se presente) in quelle shell.
+- Se `.env` è tracciato nel repository, il backup è essenziale: considera di rimuoverlo dal versionamento (`git rm --cached .env`) e aggiungerlo a `.gitignore`.
+
+Se vuoi, possiamo aggiungere un esempio nel file `.env.example` o istruzioni per integrare lo script in una pipeline CI/CD.
+
 ### Project Structure
 
 ```
