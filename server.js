@@ -9,6 +9,10 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
+// Import AI Executive Engine
+const AIExecutiveEngine = require('./ai-executive-engine');
+const BusinessIntelligence = require('./business-intelligence');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -409,7 +413,6 @@ app.post('/api/claude/message', async (req, res) => {
     // Check if query seems to need external data
     const needsDriveData = /documenti?|file|drive|modificat|creat|aggiorn|recen|oggi|ieri|settimana|mese/i.test(userMessage);
     const needsClickUpData = /task|progett|clickup|scadenz|deadline|assegnat|progress|workload/i.test(userMessage);
-    
     let contextData = "";
     
     // Gather Google Drive context if needed
@@ -636,132 +639,6 @@ app.post('/api/logout', (req, res) => {
 });
 
 // ============= HELPER FUNCTIONS =============
-
-// Get Drive context for AI queries
-async function getDriveContext(query, accessToken) {
-  try {
-    // Build search query based on user input
-    let searchQuery = '';
-    
-    // Look for time-based queries
-    if (/oggi/i.test(query)) {
-      const today = new Date().toISOString().split('T')[0];
-      searchQuery = `modifiedTime >= '${today}'`;
-    } else if (/ieri/i.test(query)) {
-      const yesterday = new Date(Date.now() - 24*60*60*1000).toISOString().split('T')[0];
-      searchQuery = `modifiedTime >= '${yesterday}'`;
-    } else if (/settimana|week/i.test(query)) {
-      const weekAgo = new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0];
-      searchQuery = `modifiedTime >= '${weekAgo}'`;
-    } else if (/mese|month/i.test(query)) {
-      const monthAgo = new Date(Date.now() - 30*24*60*60*1000).toISOString().split('T')[0];
-      searchQuery = `modifiedTime >= '${monthAgo}'`;
-    } else {
-      // Recent files by default
-      const weekAgo = new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0];
-      searchQuery = `modifiedTime >= '${weekAgo}'`;
-    }
-    
-    // Search for files
-    const response = await axios.get('https://www.googleapis.com/drive/v3/files', {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
-      },
-      params: {
-        q: searchQuery,
-        orderBy: 'modifiedTime desc',
-        pageSize: 10,
-        fields: 'files(id,name,mimeType,modifiedTime,owners,size)'
-      }
-    });
-    
-    if (!response.data.files || response.data.files.length === 0) {
-      return 'Nessun file trovato per i criteri di ricerca.';
-    }
-    
-    // Format results
-    let context = `Trovati ${response.data.files.length} file:\n`;
-    
-    response.data.files.forEach((file, index) => {
-      const modDate = new Date(file.modifiedTime).toLocaleDateString('it-IT');
-      const owner = file.owners?.[0]?.displayName || 'Sconosciuto';
-      const size = file.size ? `${Math.round(file.size / 1024)} KB` : 'N/A';
-      
-      context += `${index + 1}. **${file.name}**\n`;
-      context += `   - Modificato: ${modDate}\n`;
-      context += `   - Proprietario: ${owner}\n`;
-      context += `   - Dimensione: ${size}\n`;
-      context += `   - Tipo: ${file.mimeType}\n\n`;
-    });
-    
-    return context;
-    
-  } catch (error) {
-    console.error('Drive context error:', error);
-    return null;
-  }
-}
-
-// Get ClickUp context for AI queries
-async function getClickUpContext(query, clickupToken) {
-  try {
-    // Get user's teams first
-    const teamsResponse = await axios.get('https://api.clickup.com/api/v2/team', {
-      headers: {
-        'Authorization': clickupToken
-      }
-    });
-    
-    if (!teamsResponse.data.teams || teamsResponse.data.teams.length === 0) {
-      return 'Nessun team ClickUp trovato.';
-    }
-    
-    const teamId = teamsResponse.data.teams[0].id;
-    
-    // Get tasks based on query context
-    let taskParams = {
-      include_closed: false
-    };
-    
-    // Adjust query based on user input
-    if (/ritardo|scadenz|deadline|urgent/i.test(query)) {
-      taskParams.statuses = ['open'];
-      taskParams.due_date_lt = Date.now(); // Overdue tasks
-    }
-    
-    const tasksResponse = await axios.get(`https://api.clickup.com/api/v2/team/${teamId}/task`, {
-      headers: {
-        'Authorization': clickupToken
-      },
-      params: taskParams
-    });
-    
-    if (!tasksResponse.data.tasks || tasksResponse.data.tasks.length === 0) {
-      return 'Nessuna task trovata per i criteri di ricerca.';
-    }
-    
-    // Format results
-    let context = `Trovate ${tasksResponse.data.tasks.length} task:\n`;
-    
-    tasksResponse.data.tasks.slice(0, 10).forEach((task, index) => {
-      const dueDate = task.due_date ? new Date(parseInt(task.due_date)).toLocaleDateString('it-IT') : 'Nessuna scadenza';
-      const assignees = task.assignees?.map(a => a.username).join(', ') || 'Non assegnato';
-      const status = task.status?.status || 'Sconosciuto';
-      
-      context += `${index + 1}. **${task.name}**\n`;
-      context += `   - Status: ${status}\n`;
-      context += `   - Scadenza: ${dueDate}\n`;
-      context += `   - Assegnato a: ${assignees}\n`;
-      context += `   - Priorità: ${task.priority?.priority || 'Normale'}\n\n`;
-    });
-    
-    return context;
-    
-  } catch (error) {
-    console.error('ClickUp context error:', error);
-    return null;
-  }
-}
 
 async function testClaudeAPI(apiKey) {
   try {
