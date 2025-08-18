@@ -1,0 +1,55 @@
+name: Release Pipeline
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'package.json'
+      - 'CHANGELOG.md'
+  workflow_dispatch:
+
+jobs:
+  validate-and-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install deps (prod only)
+        run: npm ci --omit=dev || npm install --production
+
+      - name: Read package version
+        id: pkg
+        run: |
+          V=$(node -p "require('./package.json').version")
+          echo "version=$V" >> $GITHUB_OUTPUT
+
+      - name: Ensure CHANGELOG has version section
+        run: |
+          grep -q "## [${{ steps.pkg.outputs.version }}]" CHANGELOG.md || (echo "CHANGELOG missing section for version" && exit 1)
+
+      - name: Create tag if not exists
+        run: |
+          TAG=v${{ steps.pkg.outputs.version }}
+          if git rev-parse $TAG >/dev/null 2>&1; then
+            echo "Tag $TAG already exists"
+          else
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            git tag -a $TAG -m "Release $TAG"
+            git push origin $TAG
+          fi
+
+      - name: Generate Release Notes
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          tag_name: v${{ steps.pkg.outputs.version }}
+          draft: true
+          generate_release_notes: true

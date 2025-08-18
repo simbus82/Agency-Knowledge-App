@@ -80,6 +80,9 @@ const App = {
             this.loadConversations(),
             this.loadDynamicQueries()
         ]);
+
+    // Load app version (non-blocking)
+    this.loadAppVersion();
         
         // Enable input
         this.enableUserInput();
@@ -89,6 +92,18 @@ const App = {
         
         // Handle OAuth callbacks
         this.handleOAuthCallbacks();
+    },
+    // Fetch backend version and show in footer
+    async loadAppVersion(){
+        try {
+            const resp = await fetch(`${CONFIG.API_BASE}/version`);
+            if(!resp.ok) return;
+            const data = await resp.json();
+            const el = document.getElementById('versionBadge');
+            if(el) el.textContent = 'v' + data.version;
+        } catch(e){
+            // silent fail
+        }
     },
 
     // Enable user input controls

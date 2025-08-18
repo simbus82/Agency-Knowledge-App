@@ -1,6 +1,6 @@
 // test-ai-engine.js - Test script for AI-First Engine
 require('dotenv').config();
-const AIFirstEngine = require('./ai-first-engine');
+const AIFirstEngine = require('./src/engines/ai-first-engine');
 
 // Colors for console output
 const colors = {

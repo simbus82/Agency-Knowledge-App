@@ -5,21 +5,32 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
 [![Claude AI](https://img.shields.io/badge/Powered%20by-Claude%20AI-blue.svg)](https://www.anthropic.com/)
+[![Version](https://img.shields.io/github/v/tag/simbus82/Agency-Knowledge-App?label=version&color=blue)](https://github.com/simbus82/Agency-Knowledge-App/tags)
+
+> 📘 Documentazione completa: [Docs Index](./docs/README.md) · 🧾 Mini cheat‑sheet locale: [Guida Rapida](./README-LOCAL.md) · 🔐 [Security Policy](./SECURITY.md) · 🤝 [Code of Conduct](./CODE_OF_CONDUCT.md)
+
+> Struttura codice: il codice applicativo è ora consolidato sotto `src/` (cartelle `engines/`, ecc.). Rimossi i vecchi engine legacy e duplicati per una base pulita.
 
 ## 📋 Overview
 
 **Agency Knowledge Hub** is an intelligent assistant that provides unified access to your project management and document repositories. Built for **56K Agency** and released for everyone, it combines the power of **Claude AI** with seamless integrations to **ClickUp** and **Google Drive**, enabling natural language queries across all your business data.
 
+> Current Application Version: **0.9.0**
+
 ### ✨ Key Features
 
-- 🤖 **Claude AI Integration** - Powered by Anthropic's latest models
-- ✅ **ClickUp Integration** - Complete access to tasks, projects, and analytics
-- 📁 **Google Drive Access** - Search and analyze documents across your workspace
-- 💾 **Conversation History** - Persistent storage with SQLite/MySQL/PostgreSQL support
-- 🔐 **Secure Authentication** - Google Workspace OAuth with domain restrictions
-- 📊 **Cross-platform Insights** - Intelligent analysis combining data from multiple sources
-- 🎨 **Modern UI** - Clean, responsive interface with real-time updates
-- 🛠️ **Easy Setup** - Automated configuration wizard
+- 🤖 **Claude AI Integration** – Anthropic latest models (Sonnet / Opus) with dynamic model selection per-user
+- 🧠 **Multi‑Turn Memory** – Conversation context summarization + last turns retained for coherent follow‑ups
+- ✅ **ClickUp Integration** – Hierarchy (spaces / folders / lists), smart on‑demand task enrichment, comments, time metrics
+- 📁 **Google Drive Deep Access** – Shared drives, metadata + full‑text content extraction (Docs, Sheets, Slides, PDF, DOCX, XLSX, PPTX) with size & rate guards
+- 💾 **Conversation History** – Stored in SQLite (easy to swap with a different RDBMS)
+- 🗃️ **Smart Caching Layer** – TTL + stale‑while‑revalidate for ClickUp & Drive heavy calls
+- 🔐 **Secure Auth & Tokens** – Google OAuth (domain restricted) + encrypted refresh token storage & controlled refresh w/ error logging
+- 🛡️ **Admin Settings Panel** – Runtime non‑sensitive tuning (limits, cache TTL, parsing toggles) directly from the UI
+- 📊 **Cross-Platform Insights** – AI synthesizes signals across tasks & documents (no brittle hardcoded rules)
+- 🧩 **Extensible Engine** – AI‑first orchestration delegates analysis & data selection to the model
+- 🛠️ **Easy Setup** – Wizard + unified start scripts (`start:all`, `dev:all`)
+- 🖥️ **Update Scripts** – Windows PowerShell & (optionally) shell helper to pull latest safely
 
 ### 🎯 Benefits
 
@@ -48,11 +59,11 @@ cd Agency-Knowledge-App
 # Run the setup wizard
 npm run setup
 
-# Start the application
-npm start
+# Start backend + frontend together (recommended during dev)
+npm run dev:all
 
-# In a new terminal, start the frontend
-npm run frontend
+# Or production-style start (two processes)
+npm run start:all
 
 # Open your browser
 open http://localhost:8080
@@ -90,9 +101,12 @@ cp .env.example .env
 # Edit configuration
 nano .env
 
-# Start servers
+# Start servers (separate)
 npm start          # Backend (port 3000)
 npm run frontend   # Frontend (port 8080)
+
+# Or combined
+npm run start:all
 ```
 
 ## ⚙️ Configuration
@@ -116,7 +130,7 @@ npm run frontend   # Frontend (port 8080)
 2. Create OAuth application
 3. Note Client ID and Secret
 
-### Environment Variables
+### Environment Variables (Core)
 
 ```env
 # Claude AI
@@ -134,6 +148,22 @@ CLICKUP_CLIENT_SECRET=your-client-secret
 # Server
 PORT=3000
 FRONTEND_URL=http://localhost:8080
+
+# (Optional) Admin / security
+ADMIN_EMAIL=admin@yourdomain.com
+TOKEN_ENC_KEY=BASE64_32BYTE_KEY   # e.g. openssl rand -base64 32
+
+# (Optional) Alerting
+ALERT_THRESHOLD_REFRESH_ERRORS=5
+
+# (Optional) Performance & limits (can also be changed via Admin panel)
+DRIVE_MAX_BYTES=10485760
+DRIVE_CACHE_TTL=600
+CLICKUP_CACHE_TTL=3600
+MAX_DRIVE_FILES_TO_FETCH=3
+MAX_CLICKUP_TASKS_ENRICH=3
+DRIVE_EXPORT_MAX_CHARS=20000
+ENABLE_PDF_PARSE=true
 ```
 
 ## 🏗️ Architecture
@@ -157,19 +187,20 @@ FRONTEND_URL=http://localhost:8080
 **Frontend:**
 - Vanilla JavaScript ES6+
 - Modern CSS3 with flexbox/grid
-- Service Worker for offline capability
+- (Pluggable) optional service worker (future)
 
 **Backend:**
 - Node.js + Express.js
-- Session-based authentication
-- SQLite/MySQL/PostgreSQL support
-- API proxy layer for security
+- Session-based authentication (httpOnly cookies)
+- SQLite (swappable) for config, conversations, caching
+- API proxy layer (secrets never leak to browser)
+- TTL caching + content extraction workers (inline now, separable later)
 
 **Integrations:**
-- Claude Sonnet/Opus models
-- ClickUp API v2
-- Google Drive API v3
-- OAuth2 flows
+- Claude Sonnet / Opus
+- ClickUp API v2 (hierarchy + on‑demand enrichment)
+- Google Drive API v3 (allDrives + export/content parsing)
+- OAuth2 flows (Google / ClickUp)
 
 ## 📝 Usage Examples
 
@@ -205,12 +236,19 @@ FRONTEND_URL=http://localhost:8080
 ### Available Scripts
 
 ```bash
-npm start          # Start production server
-npm run dev        # Development with auto-reload
-npm run frontend   # Serve frontend (port 8080)
-npm run setup      # Run configuration wizard
-npm test          # Test API connections
+npm run dev        # Backend dev (nodemon)
+npm run dev:all    # Backend + frontend concurrently (recommended)
+npm start          # Backend only
+npm run start:all  # Backend + frontend (production style)
+npm run frontend   # Frontend only
+npm run setup      # First-time config wizard
+npm test           # Connectivity tests
+npm run test:ai    # AI engine test
 ```
+
+### Conversation Memory
+
+Il motore ora conserva: (a) riassunto dei turni più vecchi, (b) ultimi 12 messaggi completi. Questo bilancia coerenza e consumo token. Miglioramenti possibili: persistenza del riassunto cumulativo & compressione semantica.
 
 ### Aggiornare l'app da GitHub su Windows (script PowerShell)
 
@@ -244,22 +282,22 @@ Note importanti:
 
 Se vuoi, possiamo aggiungere un esempio nel file `.env.example` o istruzioni per integrare lo script in una pipeline CI/CD.
 
-### Project Structure
+### Project Structure (Updated)
 
 ```
 Agency-Knowledge-App/
-├── server.js              # Main backend server
+├── server.js              # Main backend server (AI-first orchestration endpoint)
 ├── setup.js               # Configuration wizard
 ├── index.html             # Frontend application
 ├── package.json           # Dependencies
 ├── .env.example          # Environment template
-├── /logs                 # Application logs
-├── /data                 # SQLite database
+├── /logs                 # Application logs (rotated daily JSON lines)
+├── /data                 # SQLite database (configuration, conversations, caches)
 ├── /public               # Static files
 └── /docs                # Documentation
 ```
 
-### Database Schema
+### Database Schema (Core Extract)
 
 ```sql
 -- Users table
@@ -325,18 +363,26 @@ git push heroku main
 
 ## 🔒 Security
 
-### Best Practices Implemented
+### Implemented
 
-- ✅ **API keys never in frontend** - Always through backend proxy
-- ✅ **OAuth2 for Google** - No password storage
-- ✅ **HTTPS enforced** in production
-- ✅ **Rate limiting** to prevent abuse
-- ✅ **Input sanitization** against XSS
-- ✅ **CORS properly configured**
-- ✅ **Session security** with httpOnly cookies
-- ✅ **Domain restrictions** for Google Workspace
+- ✅ **Backend-only secrets** – API keys & tokens never exposed client-side
+- ✅ **Google OAuth + domain allowlist** – Limita accesso a workspace autorizzato
+- ✅ **Encrypted refresh tokens** – AES-256-GCM (attiva se `TOKEN_ENC_KEY` configurato)
+- ✅ **Sessione sicura** – Cookie httpOnly + durata 24h
+- ✅ **CORS restrittivo** – Origin configurabile
+- ✅ **Access token auto-refresh** – Con logging errori in tabella audit
+- ✅ **Dimension limits** – Guardia su dimensione file Drive & truncation contenuti
+- ✅ **On-demand enrichment** – Riduce superficie dati non necessari
 
-### Security Headers
+### Planned / Suggested
+
+- ⏳ Rate limiting middleware
+- ⏳ Sanitizzazione/escape centralizzata output rich text
+- ⏳ Policy CSP più granulari
+- ⏳ Audit log modifiche admin settings
+- ⏳ Optional JWT alternative to sessions (B2B scenarios)
+
+### Security Headers (Suggested Baseline)
 
 ```nginx
 Content-Security-Policy: default-src 'self'
@@ -350,22 +396,22 @@ Referrer-Policy: no-referrer
 ### Common Issues
 
 #### "Claude API error: 401"
-- **Cause**: Invalid or expired API key
-- **Solution**: Check API key in settings or regenerate at console.anthropic.com
+- **Cause**: API key invalida / non configurata
+- **Solution**: Verifica chiave o aggiorna via pannello configurazione
 
 #### "Cannot access Google Drive"
-- **Cause**: Expired OAuth token or insufficient permissions
-- **Solution**: Logout and login again, verify scopes in Google Cloud Console
+- **Cause**: Token scaduto o scope mancanti
+- **Solution**: Riesegui login Google; controlla consent screen & Drive scopes
 
 #### "ClickUp data not loading"
-- **Cause**: Invalid token or wrong Team ID
-- **Solution**: Test with `curl -H "Authorization: YOUR_TOKEN" https://api.clickup.com/api/v2/team`
+- **Cause**: Token assente / Team ID non recuperabile
+- **Solution**: Rifai OAuth ClickUp; controlla se l'utente appartiene a un Team
 
 #### "Database connection failed"
-- **Cause**: Wrong credentials or unreachable server
-- **Solution**: Verify connection details and firewall rules
+- **Cause**: Permessi filesystem (SQLite) o path errato
+- **Solution**: Verifica cartella `/data`, permessi scrittura, path working directory
 
-### Debug Mode
+### Debug / Logs
 
 ```bash
 # Enable debug logging
@@ -456,19 +502,19 @@ in the Software without restriction...
 
 ## 🗺️ Roadmap
 
-### Version 1.1 (Next Release)
+### Near Term (1.1)
 - 🔄 Slack integration
 - 📝 Notion support
-- 📊 Advanced analytics dashboard
-- 🎤 Voice input/output
-- 📱 Mobile app
+- 📊 Analytics dashboard (aggregated KPIs)
+- 🎤 Voice I/O
+- 🌐 Multi-language UI refinement
 
-### Version 1.2 (Future)
-- 🔗 Webhooks support
-- 🎨 Custom AI prompts
-- 📈 Advanced reporting
-- 🔌 Plugin system
-- 🌐 Multi-language support
+### Mid Term (1.2)
+- 🔗 Webhooks & outbound triggers
+- 🎨 Custom AI prompt profiles (per team / per role)
+- 📈 Advanced reporting pack
+- 🔌 Plugin / extension system
+- 🛰️ Vector store for long-term semantic memory
 
 ## 🏆 Acknowledgments
 
@@ -480,9 +526,49 @@ in the Software without restriction...
 
 ---
 
+## 🔢 Versioning & Release Workflow
+
+Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
+
+Current base version: `0.9.0` (pre‑1.0: minor bumps may occasionally introduce adjustments otherwise deferred to major).
+
+### Bump Version
+
+Ordine consigliato (prima prepara CHANGELOG, poi bump semantico):
+
+```bash
+npm run release:prep     # Sposta note Unreleased nella nuova sezione versione
+git add CHANGELOG.md && git commit -m "chore: prepare release"
+
+npm run release:patch    # oppure release:minor / release:major
+git push origin main --follow-tags
+```
+
+### Runtime Exposure
+
+- `/version` endpoint returns `{ version }`
+- `server.js` reads from `package.json` (single source of truth)
+- README shows current version (update after release)
+
+### Recommended Flow
+1. Verifica test / health (`/health`)
+2. `npm run release:prep` (aggiorna CHANGELOG)
+3. Commit CHANGELOG
+4. `npm run release:patch|minor|major`
+5. Push con tag `git push origin main --follow-tags`
+6. GitHub Action crea (se manca) tag remoto + draft release
+7. Rifinisci note su GitHub se necessario
+
+### Future Automation Ideas
+- GitHub Action: build & deploy on tag `v*`
+- Conventional Commits → auto CHANGELOG
+- Pre-releases (`0.10.0-beta.1`) for experimental features
+
+---
+
 <div align="center">
 
-**Built with ❤️ by me**
+**Built with ❤️**
 
 [![GitHub stars](https://img.shields.io/github/stars/simbus82/Agency-Knowledge-App?style=social)](https://github.com/simbus82/Agency-Knowledge-App/stargazers)
 [⭐ Star this repo](https://github.com/simbus82/Agency-Knowledge-App/stargazers) | [🐛 Report Bug](https://github.com/simbus82/Agency-Knowledge-App/issues) | [✨ Request Feature](https://github.com/simbus82/Agency-Knowledge-App/issues)

@@ -1,4 +1,7 @@
-// ai-executive-engine.js - Core AI Executive Assistant Engine
+// ai-executive-engine.js - Core AI Executive Assistant Engine (DEPRECATED)
+if (!process.env.ALLOW_LEGACY_ENGINES) {
+  throw new Error('ai-executive-engine.js is deprecated and disabled. Use ./src/engines/ai-first-engine instead. Set ALLOW_LEGACY_ENGINES=1 to bypass (unsupported).');
+}
 class AIExecutiveEngine {
   constructor() {
     this.agencyContext = {

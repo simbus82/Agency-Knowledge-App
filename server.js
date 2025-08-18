@@ -15,14 +15,14 @@ const unzipper = require('unzipper');
 const xml2js = require('xml2js');
 require('dotenv').config();
 
-// Import AI-First Engine - Let Claude handle ALL the intelligence
-const AIFirstEngine = require('./ai-first-engine');
-// Legacy engines (deprecated - will be removed)
-// const AIExecutiveEngine = require('./ai-executive-engine');
-// const BusinessIntelligence = require('./business-intelligence');
+// Import AI-First Engine (new structured path)
+const AIFirstEngine = require('./src/engines/ai-first-engine');
+// Legacy engines removed (AIExecutiveEngine, BusinessIntelligence)
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+// Central application version (mirrors package.json). Do not edit here manually; use npm version.
+const APP_VERSION = require('./package.json').version;
 
 // Middleware
 app.use(cors({
@@ -41,6 +41,11 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
+
+// Lightweight version endpoint (health tooling / debugging)
+app.get('/version', (req, res) => {
+  res.json({ version: APP_VERSION, timestamp: new Date().toISOString() });
+});
 
 // Initialize SQLite database for config and conversations
 const db = new sqlite3.Database('./data/knowledge_hub.db');
@@ -782,7 +787,10 @@ app.post('/api/claude/message', async (req, res) => {
 
   try {
     const { messages, model } = req.body;
-    const userMessage = messages[messages.length - 1].content;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Messages array required' });
+    }
+    const userMessage = messages[messages.length - 1].content || '';
     
     logger.info('Processing query with AI-First approach', { 
       user: req.session.user.email,
@@ -820,7 +828,7 @@ app.post('/api/claude/message', async (req, res) => {
     
     // Let the AI-First Engine handle EVERYTHING
     // No hardcoding, no patterns, just pure AI intelligence
-    const aiResponse = await aiEngine.processQuery(userMessage, context);
+  const aiResponse = await aiEngine.processQuery(messages, context);
     
     logger.info('AI-First processing complete', { 
       user: req.session.user.email,
@@ -829,12 +837,12 @@ app.post('/api/claude/message', async (req, res) => {
     
     // Return response in the expected format
     res.json({
-      content: [{ 
-        type: 'text', 
-        text: aiResponse 
+      content: [{
+        type: 'text',
+        text: aiResponse
       }],
       model: context.selectedModel,
-      usage: {} // We could track token usage if needed
+      usage: {}
     });
 
   } catch (error) {
@@ -848,12 +856,19 @@ app.post('/api/claude/message', async (req, res) => {
     try {
       const { messages, model } = req.body;
       const selectedModel = model || req.session.user.selectedModel || 'claude-3-sonnet-20241022';
-      
+      // Build lightweight conversational context for fallback (last 6 messages)
+      let historySnippet = '';
+      try {
+        const lastMessages = (messages || []).slice(-6);
+        historySnippet = lastMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`)
+          .join('\n');
+      } catch {}
+      const fallbackPrompt = `You are a helpful assistant. Use the recent conversation context below to answer the final user message.\n\nConversation (most recent last):\n${historySnippet}\n\nRespond helpfully to the last user message in the same language.`;
       const fallbackResponse = await axios.post('https://api.anthropic.com/v1/messages', {
         model: selectedModel,
         max_tokens: 2000,
         temperature: 0.7,
-        messages: messages
+        messages: [ { role: 'user', content: fallbackPrompt } ]
       }, {
         headers: {
           'x-api-key': process.env.CLAUDE_API_KEY,
@@ -861,13 +876,11 @@ app.post('/api/claude/message', async (req, res) => {
           'content-type': 'application/json'
         }
       });
-      
       logger.info('Fallback to direct Claude API succeeded');
       res.json(fallbackResponse.data);
-      
     } catch (fallbackError) {
       logger.error('Fallback Claude API also failed', fallbackError);
-      res.status(500).json({ 
+      res.status(500).json({
         error: 'AI processing error',
         message: 'Mi dispiace, si è verificato un errore. Riprova tra qualche istante.'
       });

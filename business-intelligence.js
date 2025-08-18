@@ -1,4 +1,7 @@
-// business-intelligence.js - Advanced BI for Digital Agency
+// business-intelligence.js - Advanced BI for Digital Agency (DEPRECATED)
+if (!process.env.ALLOW_LEGACY_ENGINES) {
+  throw new Error('business-intelligence.js deprecated. Use AI First engine (src/engines/ai-first-engine). Set ALLOW_LEGACY_ENGINES=1 to force load.');
+}
 const axios = require('axios');
 const SemanticContentEngine = require('./semantic-content-engine');
 

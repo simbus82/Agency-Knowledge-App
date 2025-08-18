@@ -1,4 +1,6 @@
-# 56k Knowledge Hub - Documentazione Completa
+# 56k Knowledge Hub - Documentazione Completa (Legacy)
+
+> Questa versione monolitica è stata sostituita da documentazione modulare nella cartella `docs/`. Rimane per retro‑compatibilità storica; nuovi aggiornamenti avverranno nei file segmentati.
 
 ## 📋 Indice
 1. [Overview](#overview)

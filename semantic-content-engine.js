@@ -1,4 +1,7 @@
-// semantic-content-engine.js - Smart Content Discovery & Analysis
+// semantic-content-engine.js - Smart Content Discovery & Analysis (DEPRECATED)
+if (!process.env.ALLOW_LEGACY_ENGINES) {
+  throw new Error('semantic-content-engine.js deprecated. Use unified AI First engine in src/engines. Set ALLOW_LEGACY_ENGINES=1 to force load.');
+}
 const axios = require('axios');
 
 class SemanticContentEngine {
