@@ -4,9 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 ### Removed
-- Legacy engines (`ai-executive-engine`, `business-intelligence`, `semantic-content-engine`) and their shims (fully deleted)
+- Legacy engines (`ai-executive-engine`, `business-intelligence`, `semantic-content-engine`) physically deleted (consolidated into unified AI First engine)
+- Legacy shims under `src/legacy` deleted
 - Root duplicate scripts (`test-connections.js`, `test-ai-engine.js`, `debug-startup.js`) replaced by consolidated `tools/` versions
-- Transitional root `ai-first-engine.js` shim (single authoritative source in `src/engines/ai-first-engine.js`)
+- Transitional root `ai-first-engine.js` still present as shim (scheduled for removal before 1.0)
 ### Changed
 - Test & debug scripts physically relocated to `tools/` and originals removed
 - Updated README to reflect completed migration & cleanup

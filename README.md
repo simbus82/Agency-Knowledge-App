@@ -9,13 +9,13 @@
 
 > 📘 Documentazione completa: [Docs Index](./docs/README.md) · 🧾 Mini cheat‑sheet locale: [Guida Rapida](./README-LOCAL.md) · 🔐 [Security Policy](./SECURITY.md) · 🤝 [Code of Conduct](./CODE_OF_CONDUCT.md)
 
-> Struttura codice: il codice applicativo è ora consolidato sotto `src/` (cartelle `engines/`, ecc.). Rimossi i vecchi engine legacy e duplicati per una base pulita.
+> Struttura codice: il codice applicativo è consolidato sotto `src/` (`engines/`). Tutti i vecchi engine legacy e duplicati sono stati rimossi: esiste un solo motore AI unificato (`src/engines/ai-first-engine.js`).
 
 ## 📋 Overview
 
 **Agency Knowledge Hub** is an intelligent assistant that provides unified access to your project management and document repositories. Built for **56K Agency** and released for everyone, it combines the power of **Claude AI** with seamless integrations to **ClickUp** and **Google Drive**, enabling natural language queries across all your business data.
 
-> Current Application Version: **0.9.0**
+> Current Application Version: **0.9.0** *(badge sopra è sempre autorevole)*
 
 ### ✨ Key Features
 
@@ -69,7 +69,7 @@ npm run start:all
 open http://localhost:8080
 ```
 
-That's it! 🎉 The setup wizard will guide you through the configuration.
+That's it! 🎉 The setup wizard will guide you through the configuration, generando anche chiavi di sicurezza (`SESSION_SECRET`, `TOKEN_ENC_KEY`) e il modello Claude di default (`SELECTED_CLAUDE_MODEL`).
 
 ## 📦 Installation
 
@@ -149,17 +149,18 @@ CLICKUP_CLIENT_SECRET=your-client-secret
 PORT=3000
 FRONTEND_URL=http://localhost:8080
 
-# (Optional) Admin / security
-ADMIN_EMAIL=admin@yourdomain.com
-TOKEN_ENC_KEY=BASE64_32BYTE_KEY   # e.g. openssl rand -base64 32
+# Security / encryption
+SESSION_SECRET=GENERATED_SESSION_SECRET
+TOKEN_ENC_KEY=BASE64_32BYTE_KEY   # e.g. openssl rand -base64 32 (32 raw bytes)
+SELECTED_CLAUDE_MODEL=claude-sonnet-4-20250514
 
 # (Optional) Alerting
 ALERT_THRESHOLD_REFRESH_ERRORS=5
 
-# (Optional) Performance & limits (can also be changed via Admin panel)
-DRIVE_MAX_BYTES=10485760
-DRIVE_CACHE_TTL=600
-CLICKUP_CACHE_TTL=3600
+# Performance & limits (alcuni modificabili via pannello Admin)
+DRIVE_MAX_BYTES=10485760         # Max bytes per file Drive da scaricare
+DRIVE_CACHE_TTL=600              # secondi
+CLICKUP_CACHE_TTL=3600           # secondi
 MAX_DRIVE_FILES_TO_FETCH=3
 MAX_CLICKUP_TASKS_ENRICH=3
 DRIVE_EXPORT_MAX_CHARS=20000
@@ -191,6 +192,7 @@ ENABLE_PDF_PARSE=true
 
 **Backend:**
 - Node.js + Express.js
+- Single unified AI-first engine (`src/engines/ai-first-engine.js`)
 - Session-based authentication (httpOnly cookies)
 - SQLite (swappable) for config, conversations, caching
 - API proxy layer (secrets never leak to browser)
@@ -250,51 +252,80 @@ npm run test:ai    # AI engine test
 
 Il motore ora conserva: (a) riassunto dei turni più vecchi, (b) ultimi 12 messaggi completi. Questo bilancia coerenza e consumo token. Miglioramenti possibili: persistenza del riassunto cumulativo & compressione semantica.
 
-### Aggiornare l'app da GitHub su Windows (script PowerShell)
+### 🔄 Update & Maintenance
 
-Per aggiornare la copia locale su Windows preservando i dati sensibili in `.env` e il database, è stato aggiunto lo script PowerShell `update-from-github.ps1` nella radice del progetto.
+Sono inclusi due script di aggiornamento sicuro:
 
-Passaggi rapidi:
+| Script | Ambiente | Funzioni | Extra |
+|--------|----------|----------|-------|
+| `update-from-github.ps1` | Windows PowerShell | Backup `.env/data/logs`, stash, pull rebase, reinstall, quality/test, audit | Avviso se manca `TOKEN_ENC_KEY` |
+| `update-from-github.sh`  | Bash / WSL / Linux | Backup, stash, pull, reinstall, quality/test, audit | Avviso se manca `TOKEN_ENC_KEY` |
 
-1. Apri PowerShell ed entra nella cartella del progetto:
-
+Esecuzione (Windows):
 ```powershell
-cd "C:\path\to\Agency-Knowledge-App"
+cd C:\path\to\Agency-Knowledge-App
+./update-from-github.ps1
 ```
 
-2. Esegui lo script (verifica che Git e Node siano nel PATH):
-
-```powershell
-.\update-from-github.ps1
+Esecuzione (Linux/WSL/macOS):
+```bash
+./update-from-github.sh
 ```
 
-Cosa fa lo script:
-- crea backup `.env.backup`, `data-backup/` e `logs-backup/` nella root;
-- esegue `git stash` per salvare modifiche locali non committate;
-- fa `git fetch` + `git pull --rebase origin main` (modifica `$branch` nello script se usi un ramo diverso);
-- ripristina `.env` dal backup se presente e reinstalla le dipendenze (`npm ci` / `npm install`);
-- opzionalmente esegue build/test se definiti.
+Entrambi eseguono:
+1. Backup di `.env`, `data/`, `logs/`
+2. Stash modifiche locali
+3. Pull rebase da `main`
+4. Reinstall dipendenze (`npm ci` se lock presente / fallback `npm install`)
+5. Quality (lint + test) se disponibile, altrimenti solo test
+6. `npm audit --production` (non bloccante)
+7. Avviso se manca `TOKEN_ENC_KEY`
 
-Note importanti:
-- Controlla il contenuto di `.env.backup` prima di rimuoverlo; lo script non cancella automaticamente il backup finale.
-- Se preferisci usare WSL o Git Bash, puoi eseguire lo script shell `update-from-github.sh` (se presente) in quelle shell.
-- Se `.env` è tracciato nel repository, il backup è essenziale: considera di rimuoverlo dal versionamento (`git rm --cached .env`) e aggiungerlo a `.gitignore`.
-
-Se vuoi, possiamo aggiungere un esempio nel file `.env.example` o istruzioni per integrare lo script in una pipeline CI/CD.
+Buone pratiche:
+- Non tenere `.env` sotto versionamento
+- Rigenera `TOKEN_ENC_KEY` solo se accetti di invalidare i token cifrati
+- Esegui `npm run quality` localmente prima di creare una PR
 
 ### Project Structure (Updated)
 
 ```
 Agency-Knowledge-App/
-├── server.js              # Main backend server (AI-first orchestration endpoint)
-├── setup.js               # Configuration wizard
-├── index.html             # Frontend application
-├── package.json           # Dependencies
-├── .env.example          # Environment template
-├── /logs                 # Application logs (rotated daily JSON lines)
-├── /data                 # SQLite database (configuration, conversations, caches)
-├── /public               # Static files
-└── /docs                # Documentation
+├── server.js                 # Main backend server & API
+├── setup.js                  # Interactive setup wizard
+├── update-from-github.ps1    # Safe update (Windows)
+├── update-from-github.sh     # Safe update (Bash)
+├── package.json              # Scripts & dependencies
+├── .env.example              # Env template
+├── /src
+│   └── /engines/ai-first-engine.js  # Unified AI-first engine
+├── /tools                    # CLI utilities & tests
+│   ├── test-connections.js
+│   ├── test-ai-engine.js
+│   └── debug-startup.js
+├── /public                   # Static frontend (index.html, css/, js/)
+├── /data                     # SQLite DB
+├── /logs                     # Rotating logs
+├── /docs                     # Modular documentation
+└── /scripts                  # Release / helper scripts
+```
+
+I vecchi file engine legacy e duplicati sono stati rimossi (nessun codice morto).
+
+### 🧪 Testing & Diagnostics
+
+| Comando | Descrizione |
+|---------|-------------|
+| `npm test` | Test rapido connessioni API e configurazione |
+| `npm run test:ai` | Valuta capacità di analisi del motore AI senza hardcode |
+| `node tools/debug-startup.js` | Diagnostica avvio: env, dipendenze, backend, frontend, OAuth |
+| `npm run quality` | Lint + test (usato anche in CI) |
+| `npm run lint` / `npm run format` | Qualità e formattazione codice |
+
+Esempio esecuzione mirata:
+```bash
+npm run test:ai
+node tools/test-connections.js --google
+node tools/test-connections.js --claude
 ```
 
 ### Database Schema (Core Extract)

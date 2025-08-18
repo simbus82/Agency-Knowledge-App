@@ -32,11 +32,20 @@ async function setup() {
   log(`
 ╔════════════════════════════════════════════╗
 ║     56k Knowledge Hub - Setup Wizard       ║
-║     Version 1.0.0                          ║
+║     Version (package.json)                 ║
 ╚════════════════════════════════════════════╝
 `, 'bright');
 
   log('\n📋 Questo wizard ti guiderà nella configurazione iniziale.\n', 'blue');
+
+  // Resolve current app version from package.json (if exists)
+  let appVersion = 'dev';
+  try {
+    if (fs.existsSync('package.json')) {
+      appVersion = JSON.parse(fs.readFileSync('package.json','utf8')).version || 'dev';
+    }
+  } catch {}
+  log(`Versione applicazione: ${appVersion}`,'yellow');
 
   // Check Node.js version
   const nodeVersion = process.version;
@@ -76,7 +85,7 @@ async function setup() {
 
   // Claude API
   log('1️⃣  CLAUDE AI', 'bright');
-  config.CLAUDE_API_KEY = await question('   Claude API Key (sk-ant-api03-...): ');
+  config.CLAUDE_API_KEY = await question('   Claude API Key (sk-ant-...): ');
   
   // Google OAuth
   log('\n2️⃣  GOOGLE OAUTH', 'bright');
@@ -95,7 +104,14 @@ async function setup() {
   config.FRONTEND_URL = await question('   URL frontend (default: http://localhost:8080): ') || 'http://localhost:8080';
   
   // Generate session secret
-  config.SESSION_SECRET = require('crypto').randomBytes(32).toString('hex');
+  const crypto = require('crypto');
+  config.SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+  // Encryption key (32 bytes base64) for refresh tokens
+  config.TOKEN_ENC_KEY = crypto.randomBytes(32).toString('base64');
+  // Optional performance / limits
+  config.DRIVE_MAX_BYTES = '10485760'; // 10 MB default
+  config.CLICKUP_TEAM_ID = '';
+  config.DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 
   // Create .env file
   log('\n📝 Creazione file .env...', 'yellow');
@@ -119,6 +135,10 @@ CLICKUP_CLIENT_SECRET=${config.CLICKUP_CLIENT_SECRET}
 PORT=${config.PORT}
 FRONTEND_URL=${config.FRONTEND_URL}
 SESSION_SECRET=${config.SESSION_SECRET}
+TOKEN_ENC_KEY=${config.TOKEN_ENC_KEY}
+DRIVE_MAX_BYTES=${config.DRIVE_MAX_BYTES}
+CLICKUP_TEAM_ID=${config.CLICKUP_TEAM_ID}
+SELECTED_CLAUDE_MODEL=${config.DEFAULT_CLAUDE_MODEL}
 
 # Environment
 NODE_ENV=development
@@ -134,31 +154,36 @@ LOG_PATH=./logs
   fs.writeFileSync('.env', envContent);
   log('   ✓ File .env creato', 'green');
 
-  // Copy frontend file to public directory
-  log('\n📦 Copia file frontend...', 'yellow');
-  
-  if (fs.existsSync('index.html')) {
-    fs.copyFileSync('index.html', './public/index.html');
-    log('   ✓ Frontend copiato in ./public/', 'green');
+  // Frontend static asset check (already resides in public/)
+  log('\n📦 Verifica asset frontend in ./public ...', 'yellow');
+  if (!fs.existsSync('./public/index.html')) {
+    log('   ⚠️  ./public/index.html non trovato. Aggiungi i file statici nel folder public/', 'yellow');
+  } else {
+    log('   ✓ Asset frontend presenti', 'green');
   }
 
   // Create package.json if not exists
   if (!fs.existsSync('package.json')) {
     log('\n📦 Creazione package.json...', 'yellow');
     const packageJson = {
-      "name": "56k-knowledge-hub",
-      "version": "1.0.0",
-      "description": "AI-powered knowledge assistant for 56k Agency",
-      "main": "server.js",
-      "scripts": {
-        "start": "node server.js",
-        "dev": "nodemon server.js",
-        "frontend": "npx http-server ./public -p 8080 -c-1",
-        "setup": "node setup.js",
-        "test": "node test-connections.js"
+      name: "56k-knowledge-hub",
+      version: appVersion === 'dev' ? '0.1.0' : appVersion,
+      description: "AI-powered knowledge assistant for 56k Agency",
+      main: "server.js",
+      scripts: {
+        start: "node server.js",
+        dev: "nodemon server.js",
+        frontend: "npx http-server ./public -p 8080 -c-1",
+        setup: "node setup.js",
+        test: "node tools/test-connections.js",
+        "test:ai": "node tools/test-ai-engine.js",
+        lint: "eslint . --ext .js",
+        "lint:fix": "eslint . --ext .js --fix",
+        format: "prettier . --write",
+        quality: "npm run lint && npm test"
       },
-      "author": "56k Agency",
-      "license": "MIT"
+      author: "56k Agency",
+      license: "MIT"
     };
     fs.writeFileSync('package.json', JSON.stringify(packageJson, null, 2));
     log('   ✓ package.json creato', 'green');
@@ -166,21 +191,21 @@ LOG_PATH=./logs
 
   // Install dependencies
   log('\n📥 Installazione dipendenze NPM...', 'yellow');
-  log('   Questo potrebbe richiedere qualche minuto...\n', 'yellow');
-  
+  log('   Uso npm install per rispettare package.json esistente...\n', 'yellow');
   try {
-    execSync('npm install express express-session cors dotenv axios google-auth-library sqlite3 body-parser', {
-      stdio: 'inherit'
-    });
-    
-    execSync('npm install --save-dev nodemon http-server', {
-      stdio: 'inherit'
-    });
-    
+    execSync('npm install', { stdio: 'inherit' });
     log('\n   ✓ Dipendenze installate', 'green');
   } catch (error) {
-    log('\n❌ Errore durante l\'installazione delle dipendenze', 'red');
-    log('   Prova a eseguire manualmente: npm install', 'yellow');
+    log('\n❌ Errore durante npm install', 'red');
+    log('   Provo reinstallazione pulita...', 'yellow');
+    try {
+      fs.rmSync('node_modules', { recursive: true, force: true });
+      if (fs.existsSync('package-lock.json')) fs.rmSync('package-lock.json');
+      execSync('npm install', { stdio: 'inherit' });
+      log('   ✓ Reinstallazione completata', 'green');
+    } catch (e) {
+      log('   ❌ Fallita anche la reinstallazione. Esegui manualmente.', 'red');
+    }
   }
 
   // Test connections
@@ -191,7 +216,7 @@ LOG_PATH=./logs
     try {
       const axios = require('axios');
       const response = await axios.post('https://api.anthropic.com/v1/messages', {
-        model: 'claude-3-5-sonnet-20241022',
+        model: config.DEFAULT_CLAUDE_MODEL,
         max_tokens: 10,
         messages: [{ role: 'user', content: 'Hi' }]
       }, {
@@ -218,14 +243,30 @@ LOG_PATH=./logs
   log('\n3. Apri il browser:', 'yellow');
   log(`   ${config.FRONTEND_URL}`, 'bright');
   
+  // Optional quality run
+  try {
+    if (fs.existsSync('node_modules/.bin/eslint')) {
+      log('\n🔎 Quality check (lint + test)...', 'blue');
+      execSync('npm run quality', { stdio: 'inherit' });
+    }
+  } catch (e) {
+    log('   ⚠️ Quality check non completato (ignoro).', 'yellow');
+  }
+
   log('\n📚 Comandi utili:', 'blue');
-  log('   npm run dev     - Backend con auto-reload', 'yellow');
-  log('   npm test        - Test connessioni API', 'yellow');
-  log('   npm run setup   - Ri-esegui questo setup', 'yellow');
+  log('   npm run dev        - Backend con auto-reload', 'yellow');
+  log('   npm run frontend   - Avvia frontend statico', 'yellow');
+  log('   npm test           - Test connessioni API', 'yellow');
+  log('   npm run test:ai    - Test analisi AI engine', 'yellow');
+  log('   npm run lint       - Lint codice', 'yellow');
+  log('   npm run format     - Format codice', 'yellow');
+  log('   npm run quality    - Lint + test', 'yellow');
+  log('   npm run setup      - Ri-esegui setup', 'yellow');
   
   log('\n⚠️  IMPORTANTE:', 'red');
   log('   Non committare il file .env su Git!', 'yellow');
   log('   Aggiungi .env al tuo .gitignore', 'yellow');
+  log('   Conserva al sicuro TOKEN_ENC_KEY (rigenerare invalida i token cifrati)', 'yellow');
   
   log('\n' + '═'.repeat(48) + '\n', 'bright');
 

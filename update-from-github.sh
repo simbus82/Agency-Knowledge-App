@@ -2,6 +2,8 @@
 # update-from-github.sh - Script per aggiornare il progetto da GitHub
 
 echo "🔄 Aggiornamento 56k Knowledge Hub da GitHub..."
+VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "unknown")
+echo "📦 Versione corrente (package.json): $VERSION"
 
 # Colori per output
 RED='\033[0;31m'
@@ -74,11 +76,32 @@ else
 fi
 
 # Step 5: Test
-log_info "Test configurazione..."
-if npm test > /dev/null 2>&1; then
-    log_info "Test superati"
+log_info "Verifica quality/test..."
+if grep -q '"quality"' package.json 2>/dev/null; then
+    if npm run quality; then
+        log_info "Quality check completato"
+    else
+        log_warn "Quality check fallito (lint o test)"
+    fi
+elif npm test > /dev/null 2>&1; then
+    if npm test; then
+        log_info "Test superati"
+    else
+        log_warn "Test falliti"
+    fi
+fi
+
+log_info "Security audit (non bloccante)..."
+if npm audit --production; then
+    log_info "Audit completato"
 else
-    log_warn "Alcuni test sono falliti, controlla la configurazione"
+    log_warn "Audit ha rilevato vulnerabilità"
+fi
+
+if [ -f .env ]; then
+    if ! grep -q '^TOKEN_ENC_KEY=' .env; then
+        log_warn "TOKEN_ENC_KEY mancante in .env (crittografia token non attiva)"
+    fi
 fi
 
 # Step 6: Cleanup
