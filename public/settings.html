@@ -4,33 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Impostazioni - 56k Knowledge Hub</title>
+    <link rel="stylesheet" href="css/base.css">
+    <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="css/settings.css">
-    <style>
-        /* Base styles from main app */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        :root {
-            --primary: #7C3AED;
-            --primary-dark: #6D28D9;
-            --secondary: #EC4899;
-            --success: #10B981;
-            --warning: #F59E0B;
-            --danger: #EF4444;
-            --dark: #1F2937;
-            --light: #F9FAFB;
-            --border: #E5E7EB;
-        }
-
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
-    </style>
+    <link rel="stylesheet" href="css/components.css">
 </head>
 <body>
     <!-- Loading Screen -->
@@ -41,25 +18,28 @@
     </div>
 
     <!-- Main Container -->
-    <div class="settings-container" id="settingsContainer">
+    <div class="settings-container" id="settingsContainer" role="application">
         <!-- Header -->
-        <div class="settings-header">
+    <div class="settings-header" role="banner">
             <div class="header-content">
                 <div class="header-left">
-                    <button class="back-button" onclick="goBack()">
+                    <button class="back-button btn-outline" onclick="goBack()">
                         <span>←</span> Torna all'app
                     </button>
                     <h1>Impostazioni</h1>
                 </div>
                 <div class="header-right">
                     <span class="user-info" id="userInfo"></span>
+                    <span class="theme-toggle" id="themeToggleWrapper">
+                        <button type="button" id="themeToggleBtn" aria-pressed="false" aria-label="Attiva dark mode">🌙 Dark</button>
+                    </span>
                     <button id="tab-admin-settings" class="settings-tab-btn" style="display:none;margin-left:12px" aria-controls="admin-settings-section">Admin</button>
                 </div>
             </div>
         </div>
 
         <!-- Settings Content -->
-        <div class="settings-content">
+    <div class="settings-content" role="main">
             <!-- API Configuration Section -->
             <div class="settings-section">
                 <h2>🔑 Configurazione API</h2>
@@ -84,9 +64,7 @@
                                     placeholder="sk-ant-api03-..."
                                     autocomplete="off"
                                 >
-                                <button class="test-button" onclick="testConnection('claude')">
-                                    Test
-                                </button>
+                                <button class="test-button btn-outline" onclick="testConnection('claude')">Test</button>
                             </div>
                             <small class="help-text">
                                 Ottieni la tua API key da <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>
@@ -122,9 +100,7 @@
                                     placeholder="GOCSPX-..."
                                     autocomplete="off"
                                 >
-                                <button class="test-button" onclick="testConnection('google')">
-                                    Test
-                                </button>
+                                <button class="test-button btn-outline" onclick="testConnection('google')">Test</button>
                             </div>
                             <small class="help-text">
                                 Configura OAuth in <a href="https://console.cloud.google.com" target="_blank">Google Cloud Console</a>
@@ -160,9 +136,7 @@
                                     placeholder="Client Secret ClickUp"
                                     autocomplete="off"
                                 >
-                                <button class="test-button" onclick="testConnection('clickup')">
-                                    Test
-                                </button>
+                                <button class="test-button btn-outline" onclick="testConnection('clickup')">Test</button>
                             </div>
                             <small class="help-text">
                                 Crea un'app in <a href="https://app.clickup.com" target="_blank">ClickUp Settings</a>
@@ -173,9 +147,7 @@
 
                 <!-- Save Button -->
                 <div class="action-buttons">
-                    <button class="btn btn-primary" onclick="saveConfiguration()">
-                        💾 Salva Configurazione
-                    </button>
+                    <button class="btn-gradient" onclick="saveConfiguration()">💾 Salva Configurazione</button>
                 </div>
             </div>
 
@@ -212,9 +184,7 @@
 
                 <!-- Save Preferences Button -->
                 <div class="action-buttons">
-                    <button class="btn btn-secondary" onclick="savePreferences()">
-                        💾 Salva Preferenze
-                    </button>
+                    <button class="btn-outline" onclick="savePreferences()">💾 Salva Preferenze</button>
                 </div>
             </div>
 
@@ -297,8 +267,8 @@
                             </div>
 
                             <div class="form-group actions">
-                                <button type="button" id="admin-settings-restore" class="btn">Ripristina default</button>
-                                <button type="submit" id="admin-settings-save" class="btn btn-primary">Salva</button>
+                                <button type="button" id="admin-settings-restore" class="btn-outline">Ripristina default</button>
+                                <button type="submit" id="admin-settings-save" class="btn-gradient">Salva</button>
                             </div>
 
                             <div id="admin-settings-msg" role="status" aria-live="polite" class="muted" style="margin-top:8px"></div>
@@ -312,6 +282,41 @@
     <!-- Toast Container -->
     <div id="toastContainer"></div>
 
+    <!-- Footer -->
+    <footer class="app-footer" id="appFooter">
+        <span>© 2025 56k Knowledge Hub</span>
+        <span id="footerStatus" class="badge badge-info" style="display:none">Dark Mode</span>
+    </footer>
+
     <script src="js/settings.js"></script>
+    <script>
+    (function(){
+        const btn = document.getElementById('themeToggleBtn');
+        if(!btn) return;
+        const root = document.documentElement;
+        const STORAGE_KEY = 'app-theme';
+        // Init
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if(saved === 'dark') {
+            root.setAttribute('data-theme','dark');
+            btn.setAttribute('aria-pressed','true');
+            btn.textContent = '☀️ Light';
+        }
+        btn.addEventListener('click', () => {
+            const isDark = root.getAttribute('data-theme') === 'dark';
+            if(isDark) {
+                root.removeAttribute('data-theme');
+                localStorage.setItem(STORAGE_KEY,'light');
+                btn.setAttribute('aria-pressed','false');
+                btn.textContent = '🌙 Dark';
+            } else {
+                root.setAttribute('data-theme','dark');
+                localStorage.setItem(STORAGE_KEY,'dark');
+                btn.setAttribute('aria-pressed','true');
+                btn.textContent = '☀️ Light';
+            }
+        });
+    })();
+    </script>
 </body>
 </html>

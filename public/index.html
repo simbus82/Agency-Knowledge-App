@@ -4,8 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>56k Knowledge Hub - AI Assistant</title>
+    <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="css/markdown.css">
+    <link rel="stylesheet" href="css/components.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Marked.js for markdown parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
@@ -23,18 +25,22 @@
     <!-- Main Application -->
     <div class="container" id="mainContainer">
         <!-- Header -->
-        <div class="header">
+    <div class="header" role="banner">
             <div class="header-left">
-                <div class="logo">56k</div>
+        <button class="logo" aria-label="Torna alla schermata iniziale" onclick="startNewChat()">56k</button>
                 <div>
                     <h1>Knowledge Hub</h1>
                     <div class="header-subtitle">Powered by Claude AI</div>
                 </div>
             </div>
             <div class="header-actions">
+        <button id="mobileSidebarToggle" class="btn btn-secondary" aria-label="Mostra/Nascondi conversazioni" style="display:none" onclick="toggleSidebar()">☰</button>
                 <select class="model-selector" id="modelSelector" onchange="changeModel()">
                     <!-- Populated dynamically -->
                 </select>
+                <span class="theme-toggle" id="themeToggleWrapper" style="margin-left:8px;">
+                    <button type="button" id="themeToggleBtn" aria-pressed="false" aria-label="Attiva dark mode">🌙 Dark</button>
+                </span>
                 <div class="services-status" aria-hidden="false">
                     <div class="service-status" id="service-ai">
                         <div class="service-dot status-dot" id="status-ai" title="AI (Claude)"></div>
@@ -182,10 +188,10 @@
             </div>
         </div>
     </div>
-            <footer id="appFooter" style="display:flex;justify-content:space-between;align-items:center;padding:6px 12px;font-size:12px;color:#777;border-top:1px solid #eee;margin-top:4px;">
-                <span>56k Knowledge Hub</span>
-                <span id="versionBadge">v-</span>
-            </footer>
+    <footer class="app-footer" id="appFooter">
+        <span>56k Knowledge Hub</span>
+        <span id="versionBadge" class="badge badge-info" style="display:none"></span>
+    </footer>
 
     <!-- Scripts -->
     <script src="js/config.js"></script>
@@ -193,6 +199,35 @@
     <script src="js/markdown.js"></script>
     <script src="js/ui.js"></script>
     <script src="js/app.js"></script>
+    <script>
+    (function(){
+        const btn = document.getElementById('themeToggleBtn');
+        if(!btn) return;
+        const root = document.documentElement;
+        const STORAGE_KEY = 'app-theme';
+        // Init
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if(saved === 'dark') {
+            root.setAttribute('data-theme','dark');
+            btn.setAttribute('aria-pressed','true');
+            btn.textContent = '☀️ Light';
+        }
+        btn.addEventListener('click', () => {
+            const isDark = root.getAttribute('data-theme') === 'dark';
+            if(isDark) {
+                root.removeAttribute('data-theme');
+                localStorage.setItem(STORAGE_KEY,'light');
+                btn.setAttribute('aria-pressed','false');
+                btn.textContent = '🌙 Dark';
+            } else {
+                root.setAttribute('data-theme','dark');
+                localStorage.setItem(STORAGE_KEY,'dark');
+                btn.setAttribute('aria-pressed','true');
+                btn.textContent = '☀️ Light';
+            }
+        });
+    })();
+    </script>
 
     <!-- Google OAuth Confirmation Modal -->
     <div id="oauthModal" class="modal" style="display:none;">

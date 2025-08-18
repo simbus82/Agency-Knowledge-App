@@ -117,6 +117,16 @@ const UIManager = {
         
         // Update sidebar UI
         this.updateSidebarVisibility();
+
+        // Toggle mobile sidebar button visibility
+        const toggleBtn = document.getElementById('mobileSidebarToggle');
+        if (toggleBtn) {
+            if (window.innerWidth <= 768) {
+                toggleBtn.style.display = 'inline-flex';
+            } else {
+                toggleBtn.style.display = 'none';
+            }
+        }
     },
 
     // Handle messages scroll
@@ -532,6 +542,8 @@ StateManager.addListener((state) => {
 // Initialize UI when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     UIManager.init();
+    // Ensure initial responsive adjustments
+    UIManager.handleResize();
 });
 
 // Export functions to global scope for HTML onclick handlers

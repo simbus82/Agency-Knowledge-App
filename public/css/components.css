@@ -1,0 +1,72 @@
+/* ========================================
+   56k Knowledge Hub - Shared Components
+   Cards, badges, footer, utility surfaces
+   ======================================== */
+
+/* Cards */
+.card, .config-card, .feature-card {
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  position: relative;
+  transition: var(--transition);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+}
+
+.card:hover, .config-card:hover, .feature-card:hover {
+  box-shadow: 0 4px 14px -2px rgba(0,0,0,0.15);
+}
+
+/* Config card body wrapper (already in markup as .config-body) */
+.config-card { margin-bottom: 20px; }
+.config-card .config-header { display:flex; justify-content:space-between; align-items:center; padding:15px 20px; background: var(--light); border-bottom:1px solid var(--border); border-radius:12px 12px 0 0; }
+.config-card .config-body { padding:20px; }
+
+/* Feature cards keep original padding overrides */
+.feature-card { padding:25px; cursor:pointer; }
+
+/* Badges */
+.status-badge, .badge {
+  display:inline-block;
+  font-size:12px;
+  padding:4px 10px;
+  border-radius:12px;
+  font-weight:500;
+  letter-spacing:.25px;
+  background: var(--border);
+  color: var(--text-secondary);
+  line-height:1.1;
+}
+.status-badge.success, .badge-success { background:#D1FAE5; color:#065F46; }
+.status-badge.error, .badge-danger { background:#FEE2E2; color:#991B1B; }
+.status-badge.warning, .badge-warning { background:#FEF3C7; color:#92400E; }
+.status-badge.info, .badge-info { background:#DBEAFE; color:#1E3A8A; }
+
+/* Footer */
+.app-footer {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:6px 12px;
+  font-size:12px;
+  color: var(--text-secondary);
+  border-top:1px solid var(--border);
+  margin-top:4px;
+  background: rgba(255,255,255,0.6);
+  backdrop-filter: blur(6px);
+}
+
+/* Dark mode component adjustments */
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .config-card,
+:root[data-theme="dark"] .feature-card { background: #1F2430; border-color:#2F3846; box-shadow:0 2px 6px rgba(0,0,0,0.4); }
+:root[data-theme="dark"] .config-card .config-header { background:#232a36; border-color:#2F3846; }
+:root[data-theme="dark"] .status-badge, :root[data-theme="dark"] .badge { background:#2F3846; color:#CBD5E1; }
+:root[data-theme="dark"] .status-badge.success, :root[data-theme="dark"] .badge-success { background:rgba(16,185,129,0.15); color:#34D399; }
+:root[data-theme="dark"] .status-badge.warning, :root[data-theme="dark"] .badge-warning { background:rgba(245,158,11,0.15); color:#FBBF24; }
+:root[data-theme="dark"] .status-badge.error, :root[data-theme="dark"] .badge-danger { background:rgba(239,68,68,0.18); color:#F87171; }
+:root[data-theme="dark"] .status-badge.info, :root[data-theme="dark"] .badge-info { background:rgba(59,130,246,0.18); color:#60A5FA; }
+:root[data-theme="dark"] .app-footer { background:rgba(31,36,48,0.85); color:#94A3B8; }
+
+/* Utility */
+.hide { display:none !important; }
