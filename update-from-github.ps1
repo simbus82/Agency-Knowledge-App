@@ -77,10 +77,25 @@ try {
 }
 
 if ($null -ne $current -and -not $DryRun) {
-    if (git fetch origin $Branch) {
+    Write-Host "-- git fetch origin $Branch" -ForegroundColor DarkGray
+    $fetchOutput = git fetch origin $Branch 2>&1
+    $fetchExit = $LASTEXITCODE
+    if($fetchExit -eq 0){
+        Write-Info "Fetch OK"
         if (git pull --rebase origin $Branch) { Write-Info "Repository aggiornato (rebase)" }
-        else { Write-ErrorCustom "git pull --rebase fallito. Risolvi i conflitti e ripeti."; exit 1 }
-    } else { Write-ErrorCustom "git fetch fallito"; exit 1 }
+        else {
+            Write-ErrorCustom "git pull --rebase fallito. Risolvi i conflitti e ripeti.";
+            Write-Warn "Suggerimenti: git rebase --abort ; git reset --hard origin/$Branch (ATTENZIONE perdita modifiche locali)"; exit 1 }
+    } else {
+        Write-ErrorCustom "git fetch fallito (exit $fetchExit)";
+        Write-Warn "Output fetch:"; $fetchOutput | ForEach-Object { "    $_" }
+        Write-Warn "Diagnostica rapida:";
+        Write-Host "  - Remote configurati:" -ForegroundColor Yellow; try { git remote -v } catch {}
+        Write-Host "  - Branch corrente: $current (target: $Branch)" -ForegroundColor Yellow
+        Write-Host "  - Branch remoti:" -ForegroundColor Yellow; try { git branch -r | Out-String | Write-Host } catch {}
+        Write-Warn "Possibili cause: nome branch errato, rete/proxy, repo shallow (git fetch --unshallow), permessi, hook pre-fetch.";
+        exit 1
+    }
 } elseif($DryRun){ Write-Warn "DRY RUN: salto fetch/pull" }
 
 # Step 3: Restore configuration
