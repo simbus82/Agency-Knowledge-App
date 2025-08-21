@@ -27,4 +27,19 @@ async function embedBatch(texts){
   return res.data.map(d=>d.embedding);
 }
 
-module.exports = { embedBatch };
+async function embedAndStoreLexiconTerms(db){
+  return new Promise((resolve)=>{
+    db.all('SELECT term FROM rag_lexicon WHERE embedding IS NULL LIMIT 50', async (err, rows)=>{
+      if(err || !rows || !rows.length) return resolve(0);
+      const terms = rows.map(r=>r.term);
+      const embs = await embedBatch(terms);
+      const stmt = db.prepare('UPDATE rag_lexicon SET embedding = ? WHERE term = ?');
+      for(let i=0;i<terms.length;i++){
+        try { stmt.run(JSON.stringify(embs[i]), terms[i]); } catch(e){}
+      }
+      stmt.finalize(()=>resolve(terms.length));
+    });
+  });
+}
+
+module.exports = { embedBatch, embedAndStoreLexiconTerms };

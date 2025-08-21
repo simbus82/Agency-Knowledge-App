@@ -398,6 +398,49 @@ const UIManager = {
         return typingDiv;
     },
 
+    // Render structured RAG result (conclusions + support with grounding spans)
+    renderRagResult(payload){
+        const { result, run_id } = payload || {};
+        if(!result){
+            this.addMessage('ai', 'Nessun risultato RAG.');
+            return;
+        }
+        const wrapper = document.createElement('div');
+        wrapper.className = 'rag-result';
+        // Conclusions
+            const coverageMap = {};
+            (result.conclusion_grounding||[]).forEach(cg=>{ coverageMap[cg.conclusion_index]=cg.coverage; });
+            const conclusionsHtml = (result.conclusions||[]).map((c,i)=>{
+                const conf = (c.confidence!=null? (Math.round(c.confidence*100))+'%':'');
+                const cov = coverageMap[i]!=null? ('Cov:'+Math.round(coverageMap[i]*100)+'%') : '';
+                return `<div class="rag-conclusion" data-index="${i}"><div class="rag-conclusion-text">${DOMPurify.sanitize(c.text)}</div><div class="rag-conclusion-meta">${conf} ${cov}</div></div>`;
+            }).join('');
+        // Support snippets with grounding spans placeholder (we later highlight tokens)
+        const supportHtml = (result.support||[]).map((s,i)=>{
+            const spans = (result.grounding_spans||[]).find(gs=>gs.support_index===i)?.evidence_spans || [];
+            let snippet = DOMPurify.sanitize(s.snippet||'');
+            // naive highlight: wrap first token occurrences
+            spans.slice(0,12).forEach(sp=>{
+                const token = sp.token.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+                const re = new RegExp(token,'i');
+                snippet = snippet.replace(re, m=>`<mark data-abs-start="${sp.absolute_start||''}" data-abs-end="${sp.absolute_end||''}">${m}</mark>`);
+            });
+            return `<div class="rag-support" data-chunk="${s.id||''}"><div class="rag-support-title">S${i+1}</div><div class="rag-support-body">${snippet}</div></div>`;
+        }).join('');
+        wrapper.innerHTML = `
+            <div class="rag-section"><h4>Conclusioni</h4>${conclusionsHtml}</div>
+            <div class="rag-section"><h4>Evidenze</h4>${supportHtml}</div>
+            <div class="rag-tools"><button class="btn btn-secondary" data-run="${run_id}" onclick="downloadAudit('${run_id}')">⬇️ Audit</button></div>
+        `;
+        const messages = document.getElementById('messages');
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'message ai';
+        msgDiv.appendChild(wrapper);
+        messages.appendChild(msgDiv);
+        StateManager.addMessage({ type:'ai', content: '[RAG] '+ (result.conclusions||[]).map(c=>c.text).join('\n'), timestamp: new Date().toISOString(), run_id });
+        this.scrollToBottom();
+    },
+
     // Remove typing indicator
     removeTypingIndicator() {
         const indicator = document.getElementById('typing-indicator');

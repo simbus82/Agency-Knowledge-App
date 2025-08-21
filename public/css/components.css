@@ -70,3 +70,20 @@
 
 /* Utility */
 .hide { display:none !important; }
+
+/* RAG Result Blocks */
+.rag-result { border:1px solid var(--border); background: var(--card-bg,#fff); border-radius:12px; padding:16px 18px; margin:8px 0 12px; font-size:14px; line-height:1.45; }
+.rag-result h4 { margin:8px 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:.5px; color: var(--text-secondary); }
+.rag-section { margin-bottom:14px; }
+.rag-conclusion { padding:8px 10px; border:1px solid var(--border); border-radius:10px; background: var(--light); margin-bottom:8px; position:relative; }
+.rag-conclusion-meta { position:absolute; top:6px; right:8px; font-size:11px; color: var(--text-secondary); }
+.rag-support { border-left:3px solid var(--primary); padding:8px 10px 8px 14px; background: var(--light); border-radius:6px; margin-bottom:8px; }
+.rag-support-title { font-weight:600; font-size:12px; margin-bottom:4px; color: var(--primary-dark,#4c1d95); }
+.rag-support-body mark { background: #fde68a; color:#92400e; padding:0 2px; border-radius:3px; }
+.rag-tools { display:flex; gap:8px; }
+.rag-tools .btn { font-size:12px; padding:6px 10px; }
+
+:root[data-theme="dark"] .rag-result { background:#1F2430; border-color:#2F3846; }
+:root[data-theme="dark"] .rag-conclusion { background:#232a36; border-color:#2F3846; }
+:root[data-theme="dark"] .rag-support { background:#232a36; border-color:#2F3846; }
+:root[data-theme="dark"] .rag-support-body mark { background:#b45309; color:#fff; }

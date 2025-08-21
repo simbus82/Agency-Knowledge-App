@@ -8,6 +8,23 @@ npm run test:ai
 npm run release:prep
 ```
 
+### Update Scripts (Git Pull Automation)
+PowerShell (Windows):
+```
+./update-from-github.ps1 [-Branch main] [-SkipTests] [-SkipAudit] [-DryRun]
+```
+Bash (Linux/macOS):
+```
+./update-from-github.sh [--branch main] [--skip-tests] [--skip-audit] [--dry-run]
+```
+Notes:
+- Dry run prints planned operations (no writes).
+- Uses git stash push -u with timestamp label before pulling (safe even if no changes).
+- Pull strategy: fetch + rebase (conflict resolves manually then rerun).
+- Installs dependencies (npm ci if lockfile present, otherwise npm install).
+- Optional skip for test/audit to speed up hotfix rollout.
+
+
 ## Stile
 - JS moderno (ES2022) senza transpilation
 - Evita ottimizzazioni premature

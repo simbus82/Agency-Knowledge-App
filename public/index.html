@@ -38,6 +38,11 @@
                 <select class="model-selector" id="modelSelector" onchange="changeModel()">
                     <!-- Populated dynamically -->
                 </select>
+                <select class="model-selector" id="modeSelector" onchange="changeMode()" title="Modalità risposta">
+                    <option value="chat" selected>Chat</option>
+                    <option value="rag">RAG</option>
+                    <option value="auto">Auto</option>
+                </select>
                 <span class="theme-toggle" id="themeToggleWrapper" style="margin-left:8px;">
                     <button type="button" id="themeToggleBtn" aria-pressed="false" aria-label="Attiva dark mode">🌙 Dark</button>
                 </span>

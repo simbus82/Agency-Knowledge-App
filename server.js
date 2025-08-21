@@ -13,13 +13,22 @@ const mammoth = require('mammoth');
 const ExcelJS = require('exceljs');
 const unzipper = require('unzipper');
 const xml2js = require('xml2js');
+const archiver = require('archiver');
 require('dotenv').config();
+
+// Hard requirement: application must not run without LLM key
+if(!process.env.CLAUDE_API_KEY){
+  console.error('\n[FATAL] CLAUDE_API_KEY mancante. Configura la chiave prima di avviare il server.\n');
+  process.exit(1);
+}
 
 // Import AI-First Engine (new structured path)
 const AIFirstEngine = require('./src/engines/ai-first-engine');
 // RAG generalized modules (MVP)
 const { plan } = require('./src/rag/planner/planner');
 const { executeGraph } = require('./src/rag/executor/executeGraph');
+const { embedAndStoreLexiconTerms } = require('./src/rag/util/embeddings');
+const { ingestDriveContent } = require('./src/rag/util/ingestProcessor');
 // Legacy engines removed (AIExecutiveEngine, BusinessIntelligence)
 
 const app = express();
@@ -126,6 +135,93 @@ db.serialize(() => {
   )`);
   // Add embedding column if upgrading from older version without it
   try { db.run('ALTER TABLE rag_chunks ADD COLUMN embedding BLOB'); } catch(e) { /* ignore */ }
+  // Add optional offset columns for future hard grounding (start/end character positions in original source)
+  try { db.run('ALTER TABLE rag_chunks ADD COLUMN src_start INTEGER'); } catch(e){}
+  try { db.run('ALTER TABLE rag_chunks ADD COLUMN src_end INTEGER'); } catch(e){}
+
+  // RAG run logs (execution telemetry)
+  db.run(`CREATE TABLE IF NOT EXISTS rag_runs (
+    id TEXT PRIMARY KEY,
+    user_email TEXT,
+    query TEXT,
+    intents TEXT,
+    graph_json TEXT,
+    conclusions_json TEXT,
+    support_count INTEGER,
+    valid INTEGER,
+    latency_ms INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  // User feedback on runs
+  db.run(`CREATE TABLE IF NOT EXISTS rag_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
+    user_email TEXT,
+    rating INTEGER,
+    comment TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  // Dynamic lexicon of discovered terms/entities (supports query expansion & analytics)
+  db.run(`CREATE TABLE IF NOT EXISTS rag_lexicon (
+    term TEXT PRIMARY KEY,
+    type TEXT,
+    freq INTEGER DEFAULT 1,
+    embedding TEXT,           -- JSON array embedding for similarity search
+    sources TEXT,             -- comma separated source hints
+    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  // Persist intermediate artifacts for audit (planner, annotators, reasoner)
+  db.run(`CREATE TABLE IF NOT EXISTS rag_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
+    stage TEXT,              -- planner|annotate|reason|validate|compose
+    payload TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  // Cache LLM annotations per chunk (avoid re-cost)
+  db.run(`CREATE TABLE IF NOT EXISTS rag_chunk_annotations (
+    chunk_id TEXT,
+    annotator TEXT,
+    data TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (chunk_id, annotator)
+  )`);
+  // Human validated labels (active learning)
+  db.run(`CREATE TABLE IF NOT EXISTS rag_labels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chunk_id TEXT,
+    label_type TEXT,
+    label_value TEXT,
+    source TEXT,       -- human|ai
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  // Adaptive retrieval weights (single row)
+  db.run(`CREATE TABLE IF NOT EXISTS rag_retrieval_weights (
+    id INTEGER PRIMARY KEY CHECK (id=1),
+    w_sim REAL DEFAULT 0.5,
+    w_bm25 REAL DEFAULT 0.45,
+    w_llm REAL DEFAULT 0.2,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  db.run(`INSERT OR IGNORE INTO rag_retrieval_weights (id) VALUES (1)`);
+  // Ground truth relevance labels (query -> chunk relevance) for evaluation
+  db.run(`CREATE TABLE IF NOT EXISTS rag_ground_truth (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT,
+    chunk_id TEXT,
+    relevant INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  // Mode decision logging (auto/heuristic vs llm)
+  db.run(`CREATE TABLE IF NOT EXISTS rag_mode_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT,
+    decided_mode TEXT,
+    heuristic_score REAL,
+    used_llm INTEGER,
+    llm_reason TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
 });
 
 // Logger
@@ -394,6 +490,36 @@ app.get('/api/drive/file/:fileId/content', async (req, res) => {
   } catch (error) {
     logger.error('Drive file content export error', error.message || error);
     res.status(500).json({ error: 'Failed to export Drive file content' });
+  }
+});
+
+// Ingest (or re-ingest) a Drive file into rag_chunks computing real src_start/src_end offsets
+app.post('/api/rag/ingest/drive/:fileId', async (req,res)=>{
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  try {
+    const token = await getUserGoogleToken(req);
+    if(!token) return res.status(400).json({ error:'Google not connected' });
+    const { fileId } = req.params;
+    const { keep_old=false, include_preview=true } = req.body || {};
+    // Fetch metadata for name
+    let fileName = fileId;
+    try {
+      const metaResp = await axios.get(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { fields: 'name,size,mimeType' }
+      });
+      fileName = metaResp.data?.name || fileName;
+    } catch(e){ logger.warning('Drive meta fetch failed', { fileId, error: e.message }); }
+    const data = await fetchDriveFileContentWithCache(fileId, token);
+    if(!data.contentText) return res.status(400).json({ error:'empty_or_unparsed', info: data.info||{} });
+    if(!keep_old){
+      db.run(`DELETE FROM rag_chunks WHERE source='drive' AND path=?`, [fileName], (delErr)=>{ if(delErr) logger.error('Failed to delete old chunks', delErr.message); });
+    }
+    const { inserted, chunks } = await ingestDriveContent(db, fileId, fileName, data.contentText);
+    res.json({ file_id: fileId, file_name: fileName, inserted, total_chars: data.contentText.length, preview: include_preview? chunks.slice(0,5): undefined });
+  } catch (e){
+    logger.error('Drive ingestion failed', e.message||e);
+    res.status(500).json({ error:'ingest_failed' });
   }
 });
 
@@ -911,15 +1037,497 @@ app.post('/api/rag/chat', async (req, res) => {
     return res.status(401).json({ error: 'Not authenticated' });
   }
   try {
-    const { message } = req.body;
+    const { message, include_chunk_texts=false } = req.body;
     if(!message) return res.status(400).json({ error: 'message required' });
-    const graph = plan(message);
-    const result = await executeGraph(graph);
-    res.json({ query: message, graph, result });
+    const startTs = Date.now();
+  let graph;
+  try { graph = await plan(message); } catch(e){
+    logger.error('Planner failed', e.message||e);
+    return res.status(500).json({ error:'planner_failed', message:'Pianificazione AI non disponibile. Verifica la chiave LLM o riprova più tardi.' });
+  }
+  // Pre-generate run id so executor can attach artifacts
+  const runId = require('crypto').randomUUID();
+  graph.run_id = runId;
+  let result;
+  try { result = await executeGraph(graph); } catch(execErr){
+    logger.error('RAG execution failed', execErr.message||execErr);
+    if(/reasoning_failed/.test(execErr.message||'')){
+      return res.status(500).json({ error:'reason_failed', message:'Ragionamento AI non riuscito. Riprova tra poco.' });
+    }
+    if(/Entity annotation incomplete|Claim annotation incomplete/.test(execErr.message||'')){
+      return res.status(500).json({ error:'annotator_failed', message:'Annotazione AI incompleta. Riprovare.' });
+    }
+    return res.status(500).json({ error:'rag_failed', message:'Esecuzione pipeline non riuscita.' });
+  }
+    const latency = Date.now() - startTs;
+    // Persist run log
+    try {
+      const conclusionsJson = JSON.stringify(result.conclusions || result.result?.conclusions || []);
+      const supportCount = (result.support || []).length;
+      db.run(`INSERT INTO rag_runs (id,user_email,query,intents,graph_json,conclusions_json,support_count,valid,latency_ms) VALUES (?,?,?,?,?,?,?,?,?)`,
+        [runId, req.session.user.email, message, (graph.intents||[]).join(','), JSON.stringify(graph), conclusionsJson, supportCount, result.validator?.valid?1: (result.valid?1:0), latency],
+        (err)=>{ if(err) logger.error('rag_runs insert failed', err.message); }
+      );
+      // Store artifacts (planner graph and final compose) minimal for now
+      try {
+        db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [runId, 'planner', JSON.stringify(graph)]);
+        db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [runId, 'compose', JSON.stringify(result)]);
+      } catch(e){ logger.error('artifact insert failed', e.message); }
+      // Optionally enrich with full chunk texts for UI highlighting
+      if(include_chunk_texts){
+        try {
+          const chunkIds = new Set();
+          (result.support||[]).forEach(s=> s.id && chunkIds.add(s.id));
+          (result.conclusion_grounding||[]).forEach(cg=> (cg.spans||[]).forEach(sp=> sp.chunk_id && chunkIds.add(sp.chunk_id)));
+          const ids = Array.from(chunkIds).slice(0,300);
+          if(ids.length){
+            const placeholders = ids.map(()=>'?').join(',');
+            await new Promise((resolve)=>{
+              db.all(`SELECT id,text,path,loc,src_start,src_end,source,type FROM rag_chunks WHERE id IN (${placeholders})`, ids, (e, rows)=>{
+                if(!e && rows){ result.chunk_texts = rows; }
+                resolve();
+              });
+            });
+          } else {
+            result.chunk_texts = [];
+          }
+        } catch(enrichErr){ logger.error('chunk_text enrichment failed', enrichErr.message); }
+      }
+      return res.json({ run_id: runId, query: message, graph, result, latency_ms: latency });
+    } catch(e){
+      logger.error('RAG logging failed', e.message||e);
+      return res.json({ query: message, graph, result, latency_ms: latency });
+    }
   } catch(e){
     logger.error('RAG endpoint error', e.message || e);
     res.status(500).json({ error: 'rag_failed' });
   }
+});
+
+// Auto mode classifier (hybrid heuristic + optional LLM gating)
+app.post('/api/mode/classify', async (req,res)=>{
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  try {
+    const { query } = req.body;
+    if(!query || typeof query!=='string') return res.status(400).json({ error:'query required' });
+    // Heuristic scoring
+    const kw = /(prodot|document|fonte|cita|norm|limitat|conflitt|evidenz|policy|scheda|etichett|uso|permess|vietat)/i;
+    let score = 0;
+    if(kw.test(query)) score += 1;
+    if(/(mostra|cita|dimostra|fornisci|eviden)/i.test(query)) score += 0.6;
+    if(query.length > 140) score += 0.4;
+    // If appears to request transformation only
+    if(/(riassum|riformul|parafras|tradu|riscrivi)/i.test(query)) score -= 1.2;
+    let decided = score >= 1 ? 'rag':'chat';
+    let usedLLM = 0; let llm_reason = '';
+    // Ambiguous band triggers LLM gating
+    if(score >= 0.6 && score < 1){
+      try {
+        const gatingPrompt = `Classifica la domanda seguente in JSON puro. Regole: mode='rag' se servono FONTI interne, documenti aziendali, norme, politiche, evidenze o riferimenti puntuali; altrimenti 'chat'. JSON: {"mode":"rag"} o {"mode":"chat"}. Domanda: ${query}`;
+        const { claudeRequest, CLAUDE_MODEL_REASONER } = require('./src/rag/ai/claudeClient');
+        const raw = await claudeRequest(CLAUDE_MODEL_REASONER, gatingPrompt, 100, 0);
+        const s = raw.indexOf('{'); const e = raw.lastIndexOf('}');
+        if(s>=0 && e>s){
+          const parsed = JSON.parse(raw.slice(s,e+1));
+          if(parsed.mode==='rag' || parsed.mode==='chat'){
+            decided = parsed.mode; usedLLM = 1; llm_reason = raw.slice(0,200);
+          }
+        }
+      } catch(gErr){ /* fallback to heuristic */ }
+    }
+    db.run(`INSERT INTO rag_mode_decisions (query,decided_mode,heuristic_score,used_llm,llm_reason) VALUES (?,?,?,?,?)`,
+      [query, decided, score, usedLLM, llm_reason], ()=>{});
+    return res.json({ mode: decided, heuristic_score: score, used_llm: !!usedLLM });
+  } catch(e){
+    return res.status(500).json({ error:'mode_classify_failed' });
+  }
+});
+
+// Batch fetch chunk texts (for UI highlighting) ?ids=chunk1,chunk2
+app.get('/api/rag/chunks', (req,res)=>{
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  const idsParam = req.query.ids||'';
+  if(!idsParam) return res.status(400).json({ error:'ids required' });
+  const ids = idsParam.split(',').map(s=>s.trim()).filter(Boolean).slice(0,500);
+  if(!ids.length) return res.status(400).json({ error:'no_valid_ids' });
+  const placeholders = ids.map(()=>'?').join(',');
+  db.all(`SELECT id,text,path,loc,src_start,src_end,source,type FROM rag_chunks WHERE id IN (${placeholders})`, ids, (err, rows)=>{
+    if(err) return res.status(500).json({ error:'db_error' });
+    res.json(rows||[]);
+  });
+});
+
+// ----- RAG Feedback Endpoints -----
+// Submit feedback for a run (rating 1-5, optional comment)
+app.post('/api/rag/feedback', (req, res) => {
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  const { run_id, rating, comment } = req.body||{};
+  if(!run_id || typeof rating !== 'number') return res.status(400).json({ error:'run_id and numeric rating required' });
+  db.run(`INSERT INTO rag_feedback (run_id, user_email, rating, comment) VALUES (?,?,?,?)`,
+    [run_id, req.session.user.email, rating, comment||null], (err)=>{
+      if(err) return res.status(500).json({ error:'db_error' });
+      res.json({ success:true });
+    });
+});
+
+// Aggregate feedback for a run
+app.get('/api/rag/feedback/:runId', (req, res) => {
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  const runId = req.params.runId;
+  db.all(`SELECT rating, comment, created_at FROM rag_feedback WHERE run_id = ? ORDER BY created_at DESC LIMIT 50`, [runId], (err, rows)=>{
+    if(err) return res.status(500).json({ error:'db_error' });
+    if(!rows || !rows.length) return res.json({ run_id: runId, avg_rating: null, count:0, feedback: [] });
+    const sum = rows.reduce((a,r)=>a + (r.rating||0),0);
+    res.json({ run_id: runId, avg_rating: sum/rows.length, count: rows.length, feedback: rows });
+  });
+});
+
+// Trigger embedding of pending lexicon terms (admin only)
+app.post('/api/rag/lexicon/embed', async (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  try {
+    const count = await embedAndStoreLexiconTerms(db);
+    res.json({ success:true, embedded: count });
+  } catch(e){
+    res.status(500).json({ error:'embed_failed', message: e.message });
+  }
+});
+
+// List lexicon terms (paged)
+app.get('/api/rag/lexicon', (req,res)=>{
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  const limit = Math.min(parseInt(req.query.limit||'100',10), 500);
+  db.all('SELECT term,type,freq,sources,last_seen, (embedding IS NOT NULL) as embedded FROM rag_lexicon ORDER BY freq DESC LIMIT ?', [limit], (err, rows)=>{
+    if(err) return res.status(500).json({ error:'db_error' });
+    res.json(rows);
+  });
+});
+
+// ---- Metrics & Quality Dashboard Data ----
+app.get('/api/rag/metrics/overview', (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  // Aggregate in parallel style queries
+  const out = {};
+  db.get('SELECT COUNT(*) c FROM rag_runs', (e1,r1)=>{
+    out.total_runs = r1?.c||0;
+    db.get('SELECT COUNT(*) c FROM rag_feedback', (e2,r2)=>{
+      out.total_feedback = r2?.c||0;
+      db.get('SELECT AVG(rating) avg_rating FROM rag_feedback', (e3,r3)=>{
+        out.avg_rating = Number(r3?.avg_rating||0).toFixed(2);
+        db.get("SELECT AVG(latency_ms) avg_latency FROM rag_runs WHERE latency_ms>0", (e4,r4)=>{
+          out.avg_latency_ms = Math.round(r4?.avg_latency||0);
+          db.get("SELECT COUNT(*) c FROM rag_runs WHERE valid=0", (e5,r5)=>{
+            out.invalid_runs = r5?.c||0;
+            db.get("SELECT COUNT(*) c FROM rag_runs WHERE created_at >= datetime('now','-1 day')", (e6,r6)=>{
+              out.runs_last_24h = r6?.c||0;
+              res.json(out);
+            });
+          });
+        });
+      });
+    });
+  });
+});
+
+// Promote human labels (product/entity terms) into lexicon and embed
+app.post('/api/rag/lexicon/promote', async (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  const { min_freq = 1 } = req.body||{};
+  // Find candidate product entities from human labels OR annotated entities with human source
+  const sql = `SELECT l.label_value term, COUNT(*) freq
+               FROM rag_labels l
+               WHERE l.label_type='entity' AND l.label_value NOT IN (SELECT term FROM rag_lexicon)
+               GROUP BY l.label_value HAVING freq >= ? LIMIT 200`;
+  db.all(sql, [min_freq], (err, rows)=>{
+    if(err) return res.status(500).json({ error:'db_error' });
+    if(!rows.length) return res.json({ promoted:0 });
+    const stmt = db.prepare('INSERT INTO rag_lexicon (term,type,freq,sources) VALUES (?,?,?,?) ON CONFLICT(term) DO UPDATE SET freq=freq+excluded.freq');
+    rows.forEach(r=>{ try { stmt.run(r.term.toLowerCase(), 'product', r.freq, 'human'); } catch(e){} });
+    stmt.finalize(async ()=>{
+      await embedAndStoreLexiconTerms(db);
+      res.json({ promoted: rows.length });
+    });
+  });
+});
+
+// Estimate precision@k (k=5,10) using feedback as relevance proxy (rating>=4) and top retrieved artifacts
+app.get('/api/rag/metrics/precision', (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  const kVals = [5,10];
+  db.all(`SELECT r.id run_id, f.rating, a.payload retrieve_payload
+          FROM rag_runs r
+          JOIN rag_feedback f ON f.run_id = r.id
+          JOIN rag_artifacts a ON a.run_id = r.id AND a.stage LIKE 'retrieve:%'
+          ORDER BY f.created_at DESC LIMIT 100`, [], (err, rows)=>{
+    if(err) return res.status(500).json({ error:'db_error' });
+    if(!rows.length) return res.json({ precision:{} });
+    const precision = { 5:0, 10:0 };
+    const counts = { 5:0, 10:0 };
+    rows.forEach(r=>{
+      try {
+        const arr = JSON.parse(r.retrieve_payload)||[];
+        kVals.forEach(k=>{
+          const slice = arr.slice(0,k);
+          if(!slice.length) return;
+          // Heuristic: treat doc relevant if top snippet had positive rating AND contains any support label patterns
+          const rel = (r.rating>=4)? 1:0;
+          precision[k] += rel * (slice.filter(s=> s.base_sim>0.2 || s.llm_rel>=3).length / k);
+          counts[k] += 1;
+        });
+      } catch(e){}
+    });
+    const out = {};
+    kVals.forEach(k=>{ out['p@'+k] = counts[k]? +(precision[k]/counts[k]).toFixed(3): null; });
+    res.json({ precision: out, samples: rows.length });
+  });
+});
+
+// --- Ground Truth CRUD (admin) ---
+app.post('/api/rag/groundtruth', (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  const { query, chunk_id, relevant } = req.body||{};
+  if(!query || !chunk_id || typeof relevant !== 'boolean') return res.status(400).json({ error:'missing_fields' });
+  db.run('INSERT INTO rag_ground_truth (query,chunk_id,relevant) VALUES (?,?,?)', [query.trim(), chunk_id, relevant?1:0], function(err){
+    if(err) return res.status(500).json({ error:'db_error' });
+    res.json({ id:this.lastID, query, chunk_id, relevant });
+  });
+});
+
+app.get('/api/rag/groundtruth', (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  const { query: q, limit } = req.query||{};
+  const lim = Math.min(parseInt(limit||'200',10), 1000);
+  if(q){
+    db.all('SELECT * FROM rag_ground_truth WHERE query = ? ORDER BY created_at DESC LIMIT ?', [q, lim], (e, rows)=>{
+      if(e) return res.status(500).json({ error:'db_error' });
+      res.json(rows);
+    });
+  } else {
+    db.all('SELECT * FROM rag_ground_truth ORDER BY created_at DESC LIMIT ?', [lim], (e, rows)=>{
+      if(e) return res.status(500).json({ error:'db_error' });
+      res.json(rows);
+    });
+  }
+});
+
+app.delete('/api/rag/groundtruth/:id', (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  db.run('DELETE FROM rag_ground_truth WHERE id=?', [req.params.id], function(err){
+    if(err) return res.status(500).json({ error:'db_error' });
+    res.json({ deleted: this.changes });
+  });
+});
+
+// Ground truth based precision/recall evaluation
+app.get('/api/rag/metrics/groundtruth', (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  const kParams = (req.query.k || '5,10').split(',').map(x=>parseInt(x.trim(),10)).filter(x=>x>0 && x<=100);
+  const wantDetails = req.query.details==='1';
+  db.all('SELECT query, chunk_id, relevant FROM rag_ground_truth', [], (e, rows)=>{
+    if(e) return res.status(500).json({ error:'db_error' });
+    if(!rows.length) return res.json({ queries:0, metrics:{} });
+    // Group ground truth by query
+    const byQuery = new Map();
+    rows.forEach(r=>{
+      if(!byQuery.has(r.query)) byQuery.set(r.query, []);
+      byQuery.get(r.query).push(r);
+    });
+    const queries = Array.from(byQuery.keys());
+    const metricsAgg = {}; kParams.forEach(k=> metricsAgg[k] = { sumP:0, sumR:0, count:0 });
+    const details = [];
+    // Helper to process sequentially
+    const processNext = (idx)=>{
+      if(idx>=queries.length){
+        const out = {};
+        kParams.forEach(k=>{
+          out['p@'+k] = metricsAgg[k].count? +(metricsAgg[k].sumP/metricsAgg[k].count).toFixed(3): null;
+          out['r@'+k] = metricsAgg[k].count? +(metricsAgg[k].sumR/metricsAgg[k].count).toFixed(3): null;
+        });
+        return res.json({ queries: queries.length, metrics: out, details: wantDetails? details: undefined });
+      }
+      const q = queries[idx];
+      // latest run for this query
+      db.get('SELECT id FROM rag_runs WHERE query = ? ORDER BY created_at DESC LIMIT 1', [q], (er, runRow)=>{
+        if(er || !runRow){ processNext(idx+1); return; }
+        db.get("SELECT payload FROM rag_artifacts WHERE run_id = ? AND stage LIKE 'retrieve:%' ORDER BY id ASC LIMIT 1", [runRow.id], (ea, artRow)=>{
+          if(ea || !artRow){ processNext(idx+1); return; }
+          let retrieved = [];
+          try { retrieved = JSON.parse(artRow.payload)||[]; } catch(_){}
+          const gt = byQuery.get(q);
+          const relevantSet = new Set(gt.filter(g=>g.relevant).map(g=>g.chunk_id));
+          const totalRelevant = relevantSet.size || 1; // avoid zero division for recall
+          kParams.forEach(k=>{
+            const topK = retrieved.slice(0,k).map(r=>r.id);
+            const relRetrieved = topK.filter(id=>relevantSet.has(id)).length;
+            const precision = relRetrieved / k;
+            const recall = relRetrieved / totalRelevant;
+            metricsAgg[k].sumP += precision; metricsAgg[k].sumR += recall; metricsAgg[k].count += 1;
+            if(wantDetails){
+              details.push({ query:q, k, precision:+precision.toFixed(3), recall:+recall.toFixed(3), relRetrieved, kSize:k, totalRelevant });
+            }
+          });
+          processNext(idx+1);
+        });
+      });
+    };
+    processNext(0);
+  });
+});
+
+// ---- Audit export (JSON bundle) ----
+app.get('/api/rag/audit/:runId', (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  const runId = req.params.runId;
+  const bundle = {};
+  db.get('SELECT * FROM rag_runs WHERE id=?', [runId], (e1, runRow)=>{
+    if(e1||!runRow) return res.status(404).json({ error:'run_not_found' });
+    bundle.run = runRow;
+    db.all('SELECT stage,payload,created_at FROM rag_artifacts WHERE run_id=? ORDER BY id', [runId], (e2, artRows)=>{
+      bundle.artifacts = artRows||[];
+      db.all('SELECT rating,comment,created_at FROM rag_feedback WHERE run_id=?', [runId], (e3, fbRows)=>{
+        bundle.feedback = fbRows||[];
+        // collect chunk ids from artifacts retrieve & reason for evidence snapshot
+        const chunkIds = new Set();
+        (bundle.artifacts||[]).forEach(a=>{
+          if(a.stage.startsWith('retrieve:')){
+            try { JSON.parse(a.payload).forEach(c=> c.id && chunkIds.add(c.id)); } catch(e){}
+          }
+          if(a.stage.startsWith('reason:')){
+            try { const jr = JSON.parse(a.payload); (jr.support||[]).forEach(s=> s.id && chunkIds.add(s.id)); } catch(e){}
+          }
+        });
+        const idArr = Array.from(chunkIds);
+        if(!idArr.length) return res.json(bundle);
+        const placeholders = idArr.map(()=>'?').join(',');
+        db.all(`SELECT id,source,type,path,loc,src_start,src_end,text FROM rag_chunks WHERE id IN (${placeholders})`, idArr, (e4, rows)=>{
+          bundle.evidence_chunks = rows||[];
+          res.json(bundle);
+        });
+      });
+    });
+  });
+});
+
+// ZIP stream variant: produces a downloadable archive with structured JSON files
+app.get('/api/rag/audit/:runId/zip', (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  const runId = req.params.runId;
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="audit_${runId}.zip"`);
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  archive.on('error', err=>{ logger.error('Audit zip error', err.message); try { res.status(500).end(); } catch(_){} });
+  archive.pipe(res);
+  // Gather data in nested callbacks then append
+  db.get('SELECT * FROM rag_runs WHERE id=?', [runId], (e1, runRow)=>{
+    if(e1 || !runRow){ archive.append(JSON.stringify({ error:'run_not_found' }), { name: 'error.json' }); return archive.finalize(); }
+    archive.append(JSON.stringify(runRow,null,2), { name: 'run.json' });
+    db.all('SELECT stage,payload,created_at FROM rag_artifacts WHERE run_id=? ORDER BY id', [runId], (e2, artRows)=>{
+      archive.append(JSON.stringify(artRows||[],null,2), { name: 'artifacts.json' });
+      db.all('SELECT rating,comment,created_at FROM rag_feedback WHERE run_id=?', [runId], (e3, fbRows)=>{
+        archive.append(JSON.stringify(fbRows||[],null,2), { name:'feedback.json' });
+        // derive chunk ids
+        const chunkIds = new Set();
+        (artRows||[]).forEach(a=>{
+          if(a.stage.startsWith('retrieve:')){ try { JSON.parse(a.payload).forEach(c=> c.id && chunkIds.add(c.id)); } catch(_){} }
+          if(a.stage.startsWith('reason:')){ try { const jr = JSON.parse(a.payload); (jr.support||[]).forEach(s=> s.id && chunkIds.add(s.id)); } catch(_){} }
+        });
+        const idArr = Array.from(chunkIds);
+        if(!idArr.length){ archive.finalize(); return; }
+        const placeholders = idArr.map(()=>'?').join(',');
+        db.all(`SELECT id,source,type,path,loc,src_start,src_end,text FROM rag_chunks WHERE id IN (${placeholders})`, idArr, (e4, rows)=>{
+          archive.append(JSON.stringify(rows||[],null,2), { name:'evidence_chunks.json' });
+          // Quick index.html for humans
+          const summaryHtml = `<!DOCTYPE html><html><body><h1>Audit ${runId}</h1><pre>${escapeHtml(JSON.stringify({ run: runRow, counts:{ artifacts: (artRows||[]).length, feedback:(fbRows||[]).length, evidence:(rows||[]).length } }, null,2))}</pre></body></html>`;
+          archive.append(summaryHtml, { name:'index.html' });
+          archive.finalize();
+        });
+      });
+    });
+  });
+});
+
+function escapeHtml(str){
+  return str.replace(/[&<>"']/g, c=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+}
+
+// ---- Adaptive Retrieval Weights ----
+app.get('/api/rag/retrieval/weights', (req,res)=>{
+  db.get('SELECT w_sim,w_bm25,w_llm,updated_at FROM rag_retrieval_weights WHERE id=1', (err,row)=>{
+    if(err) return res.status(500).json({ error:'db_error' });
+    res.json(row||{});
+  });
+});
+
+// Recompute weights from recent feedback (simple heuristic)
+app.post('/api/rag/retrieval/weights/recompute', (req,res)=>{
+  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
+  // heuristic: look at last 30 runs with feedback, average top chunk metrics saved in artifacts retrieve, weight scaled by rating
+  const limit = 30;
+  db.all(`SELECT r.id run_id, f.rating, a.payload retrieve_payload
+          FROM rag_runs r
+          JOIN rag_feedback f ON f.run_id = r.id
+          JOIN rag_artifacts a ON a.run_id = r.id AND a.stage LIKE 'retrieve:%'
+          ORDER BY f.created_at DESC LIMIT ?`, [limit], (err, rows)=>{
+    if(err) return res.status(500).json({ error:'db_error' });
+    if(!rows.length) return res.json({ updated:false, reason:'no_feedback' });
+    let sumSim=0, sumBm=0, sumLlm=0, weightTotal=0;
+    rows.forEach(r=>{
+      try {
+        const arr = JSON.parse(r.retrieve_payload)||[];
+        if(!arr.length) return;
+        const top = arr[0];
+        const rating = r.rating||1;
+        sumSim += (top.base_sim||0)*rating;
+        sumBm  += (top.base_bm25||0)*rating;
+        sumLlm += (top.llm_rel!=null? (top.llm_rel/5): 0)*rating;
+        weightTotal += rating;
+      } catch(e){}
+    });
+    if(weightTotal===0) return res.json({ updated:false, reason:'no_valid_data' });
+    let wSim = sumSim/weightTotal; let wBm = sumBm/weightTotal; let wLlm = sumLlm/weightTotal;
+    const norm = wSim + wBm + wLlm || 1;
+    wSim/=norm; wBm/=norm; wLlm/=norm;
+    db.run('UPDATE rag_retrieval_weights SET w_sim=?, w_bm25=?, w_llm=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [wSim, wBm, wLlm], (uErr)=>{
+      if(uErr) return res.status(500).json({ error:'update_failed' });
+      res.json({ updated:true, weights:{ w_sim:wSim, w_bm25:wBm, w_llm:wLlm } });
+    });
+  });
+});
+
+// ---- Active Learning: label management ----
+app.post('/api/rag/labels', (req,res)=>{
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  const { chunk_id, label_type, label_value } = req.body||{};
+  if(!chunk_id || !label_type || !label_value) return res.status(400).json({ error:'missing_fields' });
+  db.run('INSERT INTO rag_labels (chunk_id,label_type,label_value,source) VALUES (?,?,?,?)', [chunk_id, label_type, label_value, 'human'], (err)=>{
+    if(err) return res.status(500).json({ error:'db_error' });
+    res.json({ success:true });
+  });
+});
+
+app.get('/api/rag/labels', (req,res)=>{
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  const { chunk_id } = req.query;
+  if(!chunk_id) return res.status(400).json({ error:'chunk_id required' });
+  db.all('SELECT label_type,label_value,source,created_at FROM rag_labels WHERE chunk_id = ? ORDER BY created_at DESC', [chunk_id], (err, rows)=>{
+    if(err) return res.status(500).json({ error:'db_error' });
+    res.json(rows);
+  });
+});
+
+// Uncertain chunks suggestion (simple: chunks with claim_statement but no prohibition/permission labels and no human labels)
+app.get('/api/rag/active/uncertain', (req,res)=>{
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  const limit = Math.min(parseInt(req.query.limit||'20',10), 100);
+  db.all(`SELECT c.id,c.text FROM rag_chunks c
+          LEFT JOIN rag_chunk_annotations a ON a.chunk_id=c.id AND a.annotator='claims_v1'
+          LEFT JOIN rag_labels l ON l.chunk_id=c.id
+          WHERE (a.data LIKE '%claim_statement%' AND (a.data NOT LIKE '%prohibition%' AND a.data NOT LIKE '%permission%'))
+            AND l.id IS NULL
+          LIMIT ?`, [limit], (err, rows)=>{
+    if(err) return res.status(500).json({ error:'db_error' });
+    res.json(rows);
+  });
 });
 
 // ClickUp API proxy
@@ -1320,6 +1928,9 @@ app.get('/health', (req, res) => {
       clickup: !!process.env.CLICKUP_CLIENT_ID,
       database: !!dbTest.success
     };
+    // Planner and annotators readiness (simple key presence since they are LLM-only now)
+    const planner_ok = services.claude; // same condition for now
+    const annotators_ok = services.claude; // rely on CLAUDE_API_KEY presence
 
     const errors = {};
     if (!dbTest.success) errors.database = dbTest.error;
@@ -1327,6 +1938,8 @@ app.get('/health', (req, res) => {
     res.json({
       status: Object.values(services).every(Boolean) ? 'healthy' : 'degraded',
       services,
+      planner_ok,
+      annotators_ok,
       errors,
       timestamp: new Date().toISOString()
     });

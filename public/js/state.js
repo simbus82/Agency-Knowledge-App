@@ -9,6 +9,7 @@ let state = {
     conversations: [],
     models: [],
     selectedModel: null,
+    mode: 'chat', // 'chat' or 'rag'
     isLoading: false,
     hasClickUp: false,
     currentMessages: [],
@@ -102,6 +103,13 @@ const StateManager = {
     addMessage(message) {
         state.currentMessages.push(message);
         this.notifyStateChange();
+    },
+
+    setMode(mode){
+        if(mode!==state.mode){
+            state.mode = mode;
+            this.notifyStateChange();
+        }
     },
 
     clearMessages() {

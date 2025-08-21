@@ -25,11 +25,35 @@ git pull
 npm install
 npm run start:all   # o restart se già in esecuzione
 ```
-Oppure script PowerShell (se esiste lo usi nella root):
+Script aggiornamento (automazione completa):
+PowerShell (Windows):
 ```powershell
-./update-from-github.ps1
+./update-from-github.ps1 [-Branch main] [-SkipTests] [-SkipAudit] [-DryRun]
 ```
-Fa backup + pull + reinstall.
+Esempi:
+```powershell
+./update-from-github.ps1                       # aggiornamento standard
+./update-from-github.ps1 -DryRun               # simulazione senza modifiche
+./update-from-github.ps1 -Branch feature/x     # aggiorna da branch specifico
+./update-from-github.ps1 -SkipTests -SkipAudit # più veloce, niente test/audit
+```
+Bash (Linux/macOS):
+```bash
+./update-from-github.sh [--branch main] [--dry-run] [--skip-tests] [--skip-audit]
+```
+Esempi:
+```bash
+./update-from-github.sh --dry-run
+./update-from-github.sh --branch release/0.9.1
+./update-from-github.sh --skip-tests --skip-audit
+```
+Funzioni chiave:
+- Backup automatico (.env, data/, logs/) + restore
+- Stash modifiche locali con label timestamp
+- Pull con rebase sul branch selezionato
+- Install dipendenze (npm ci se c'è lockfile; fallback a npm install)
+- Test / quality condizionali e audit opzionale
+- Modalità DryRun (mostra cosa farebbe senza toccare i file)
 
 ## 3. Variabili ambiente minime
 File `.env` (se manca copia da `.env.example`):

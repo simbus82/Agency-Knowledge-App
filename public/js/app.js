@@ -234,42 +234,66 @@ async function sendMessage() {
     const typingIndicator = UIManager.createTypingIndicator();
     
     try {
-        // Send to backend with timeout
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUTS.CLAUDE_API);
-        
-        const response = await fetch(`${CONFIG.API_BASE}/api/claude/message`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            credentials: 'include',
-            signal: controller.signal,
-            body: JSON.stringify({
-                messages: [
-                    { role: 'user', content: userMessage }
-                ],
-                model: StateManager.getState().selectedModel
-            })
-        });
-        
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const mode = StateManager.getState().mode || 'chat';
+                let effectiveMode = mode;
+                if(mode === 'auto'){
+                        // local quick heuristic while waiting server classifier
+                        const localMode = decideLocalMode(userMessage);
+                        try {
+                            const classifyResp = await fetch(`${CONFIG.API_BASE}/api/mode/classify`,{
+                                method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
+                                body: JSON.stringify({ query: userMessage })
+                            });
+                            if(classifyResp.ok){
+                                const cls = await classifyResp.json();
+                                effectiveMode = cls.mode || localMode;
+                            } else {
+                                effectiveMode = localMode;
+                            }
+                        } catch{ effectiveMode = localMode; }
+                        UIManager.showToast(`Auto → ${effectiveMode.toUpperCase()}`,'info');
+                }
+                if(effectiveMode === 'rag'){
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUTS.CLAUDE_API);
+            const response = await fetch(`${CONFIG.API_BASE}/api/rag/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                signal: controller.signal,
+                body: JSON.stringify({ message: userMessage, include_chunk_texts: true })
+            });
+            clearTimeout(timeoutId);
+            if(!response.ok){
+                const errJson = await response.json().catch(()=>({}));
+                throw new Error(errJson.message || `HTTP ${response.status}`);
+            }
+            const data = await response.json();
+            UIManager.removeTypingIndicator();
+            // Render structured RAG answer
+            UIManager.renderRagResult(data);
+            await saveConversation();
+    } else {
+            // Standard chat
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUTS.CLAUDE_API);
+            const response = await fetch(`${CONFIG.API_BASE}/api/claude/message`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                signal: controller.signal,
+                body: JSON.stringify({
+                    messages: [ { role: 'user', content: userMessage } ],
+                    model: StateManager.getState().selectedModel
+                })
+            });
+            clearTimeout(timeoutId);
+            if(!response.ok){ throw new Error(`HTTP ${response.status}: ${response.statusText}`); }
+            const data = await response.json();
+            UIManager.removeTypingIndicator();
+            UIManager.addMessage('ai', data.content[0].text);
+            await saveConversation();
         }
-        
-        const data = await response.json();
-        
-        // Remove typing indicator
-        UIManager.removeTypingIndicator();
-        
-    // Add AI response with markdown rendering
-    UIManager.addMessage('ai', data.content[0].text);
-
-    // Save conversation (call explicit function to avoid reliance on `this` scope)
-    await saveConversation();
-        
     } catch (error) {
         console.error('Message send error:', error);
         UIManager.removeTypingIndicator();
@@ -444,9 +468,38 @@ window.startNewChat = startNewChat;
 window.askQuestion = askQuestion;
 window.startFeatureConversation = startFeatureConversation;
 window.changeModel = changeModel;
+function changeMode(){
+    const selector = document.getElementById('modeSelector');
+    StateManager.setMode(selector.value);
+    UIManager.showToast(`Modalità: ${selector.value.toUpperCase()}`, 'info');
+}
+window.changeMode = changeMode;
+
+function decideLocalMode(q){
+    const kw = /(prodot|document|fonte|cita|norm|limitat|conflitt|evidenz|policy|scheda|etichett|uso|permess|vietat)/i;
+    let score = 0;
+    if(kw.test(q)) score += 1;
+    if(/(mostra|cita|dimostra|fornisci|eviden)/i.test(q)) score += 0.6;
+    if(q.length > 140) score += 0.4;
+    if(/(riassum|riformul|parafras|tradu|riscrivi)/i.test(q)) score -= 1.2;
+    return score >= 1 ? 'rag':'chat';
+}
 window.connectClickUp = connectClickUp;
 window.openSettings = openSettings;
 window.logout = logout;
+async function downloadAudit(runId){
+    if(!runId){ UIManager.showToast('Run id mancante','warning'); return; }
+    try {
+        const resp = await fetch(`${CONFIG.API_BASE}/api/rag/audit/${runId}/zip`, { credentials:'include' });
+        if(!resp.ok) throw new Error('Download fallito');
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `audit_${runId}.zip`; a.click();
+        setTimeout(()=> URL.revokeObjectURL(url), 5000);
+    } catch(e){ UIManager.showToast('Errore download audit','error'); }
+}
+window.downloadAudit = downloadAudit;
 
 // Initialize application when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {

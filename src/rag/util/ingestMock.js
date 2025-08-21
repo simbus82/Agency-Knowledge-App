@@ -11,9 +11,12 @@ const samples = [
 function run(){
   const db = new sqlite3.Database('./data/knowledge_hub.db');
   db.serialize(()=>{
+    let cursor=0; // mock cumulative offset
     samples.forEach(s => {
       const id = crypto.createHash('sha1').update(s.text + s.path + s.loc).digest('hex');
-      db.run(`INSERT OR REPLACE INTO rag_chunks (id,text,source,type,path,loc,updated_at) VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)`, [id,s.text,s.source,s.type,s.path,s.loc]);
+      const start = cursor; const end = cursor + s.text.length;
+      cursor = end + 1;
+      db.run(`INSERT OR REPLACE INTO rag_chunks (id,text,source,type,path,loc,src_start,src_end,updated_at) VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`, [id,s.text,s.source,s.type,s.path,s.loc,start,end]);
     });
   });
   db.close(()=>console.log('Mock ingestion complete'));
