@@ -92,6 +92,8 @@ db.serialize(() => {
     selected_claude_model TEXT DEFAULT 'claude-sonnet-4-20250514',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+  // Migrate legacy model ids (single pass)
+  try { db.run(`UPDATE users SET selected_claude_model='claude-sonnet-4-20250514' WHERE selected_claude_model IN ('claude-3-sonnet-20241022','sonnet-20241022')`); } catch(e){}
 
   // add google_refresh_token column if missing (ignore errors)
   try {
@@ -629,43 +631,29 @@ app.post('/api/config/save', async (req, res) => {
 });
 
 // Get available Claude models
-app.get('/api/claude/models', (req, res) => {
-  const models = [
-    {
-      id: "claude-opus-4-1-20250805",
-      name: "Claude Opus 4.1",
-      description: "Ultimissimo modello, massime capacità per task complessi",
-      category: "premium",
-      context: "200K tokens",
-      recommended: false
-    },
-    {
-      id: "claude-opus-4-20250305",
-      name: "Claude Opus 4",
-      description: "Molto potente, ideale per analisi approfondite",
-      category: "premium",
-      context: "200K tokens",
-      recommended: false
-    },
-    {
-      id: "claude-sonnet-4-20250514",
-      name: "Claude Sonnet 4",
-      description: "Bilanciato, ottimo per uso quotidiano aziendale",
-      category: "standard",
-      context: "200K tokens",
-      recommended: true
-    },
-    {
-      id: "claude-sonnet-3-7-20241205",
-      name: "Claude Sonnet 3.7",
-      description: "Veloce ed efficiente per query semplici",
-      category: "standard",
-      context: "200K tokens",
-      recommended: false
-    }
-  ];
-
-  res.json(models);
+const AVAILABLE_MODELS = [
+  { id: 'claude-opus-4-1-20250805', name: 'Claude Opus 4.1', description: 'Ultimissimo modello, massime capacità per task complessi', category: 'premium', context: '200K tokens', recommended: false },
+  { id: 'claude-opus-4-20250305', name: 'Claude Opus 4', description: 'Molto potente, ideale per analisi approfondite', category: 'premium', context: '200K tokens', recommended: false },
+  { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', description: 'Bilanciato, ottimo per uso quotidiano aziendale', category: 'standard', context: '200K tokens', recommended: true },
+  { id: 'claude-sonnet-3-7-20241205', name: 'Claude Sonnet 3.7', description: 'Veloce ed efficiente per query semplici', category: 'standard', context: '200K tokens', recommended: false }
+];
+function mapLegacyModelId(id){
+  if(!id) return id;
+  const legacyMap = { 'claude-3-sonnet-20241022':'claude-sonnet-4-20250514', 'sonnet-20241022':'claude-sonnet-4-20250514' };
+  return legacyMap[id] || id;
+}
+function sanitizeModelId(id){
+  const mapped = mapLegacyModelId(id);
+  if(AVAILABLE_MODELS.some(m=>m.id===mapped)) return mapped;
+  return AVAILABLE_MODELS.find(m=>m.recommended)?.id || AVAILABLE_MODELS[0].id;
+}
+app.get('/api/claude/models', (req,res)=> res.json(AVAILABLE_MODELS));
+app.get('/api/claude/models/status', (req,res)=>{
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  const raw = req.session.user.selectedModel;
+  const active = sanitizeModelId(raw);
+  const exists = AVAILABLE_MODELS.some(m=>m.id===active);
+  res.json({ active_model: active, exists, legacy_original: raw!==active? raw: null });
 });
 
 // Get and update admin-visible settings (safe, non-sensitive)
@@ -795,6 +783,19 @@ app.post('/api/test/connection', async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
+});
+// Lightweight consolidated status (no side-effects) for header badges
+app.get('/api/status/services', async (req,res)=>{
+  const summary = { claude:false, database:false, clickup:false, drive:false };
+  // Claude: just check key present
+  summary.claude = !!process.env.CLAUDE_API_KEY;
+  // DB: simple pragma query
+  try { await new Promise((resolve,reject)=> db.get('SELECT 1 as ok', (e,row)=> e?reject(e):resolve(row))); summary.database=true; } catch{}
+  // ClickUp: token in session
+  try { summary.clickup = !!(req.session?.user?.clickupToken); } catch{}
+  // Drive: token in session
+  try { summary.drive = !!(req.session?.user?.googleAccessToken); } catch{}
+  res.json({ success:true, services: summary, timestamp: new Date().toISOString() });
 });
 
 // ============= GOOGLE OAUTH =============
@@ -972,7 +973,7 @@ app.post('/api/claude/message', async (req, res) => {
       clickupToken: req.session.user.clickupToken || null,
       googleAccessToken: req.session.user.googleAccessToken || null,
       teamId: teamId || null,
-      selectedModel: model || req.session.user.selectedModel || 'claude-3-sonnet-20241022',
+  selectedModel: sanitizeModelId(model || req.session.user.selectedModel),
       userName: req.session.user.name,
       userEmail: req.session.user.email
     };
@@ -1006,7 +1007,7 @@ app.post('/api/claude/message', async (req, res) => {
     // Fallback to basic Claude response if AI-First fails
     try {
       const { messages, model } = req.body;
-      const selectedModel = model || req.session.user.selectedModel || 'claude-3-sonnet-20241022';
+  const selectedModel = sanitizeModelId(model || req.session.user.selectedModel);
       // Build lightweight conversational context for fallback (last 6 messages)
       let historySnippet = '';
       try {
@@ -1053,6 +1054,25 @@ app.post('/api/rag/chat', async (req, res) => {
     logger.error('Planner failed', e.message||e);
     return res.status(500).json({ error:'planner_failed', message:'Pianificazione AI non disponibile. Verifica la chiave LLM o riprova più tardi.' });
   }
+  // Sanitize graph: ensure inputs exist for non-retrieve tasks to avoid runtime TypeError
+  try {
+    if(graph && Array.isArray(graph.tasks)){
+      const seen = [];
+      let fixed = 0;
+      graph.tasks.forEach((t, idx)=>{
+        if(!t.id) { t.id = 't'+(idx+1); fixed++; }
+        if(t.type !== 'retrieve'){
+          if(!Array.isArray(t.inputs) || !t.inputs.length){
+            // fallback: attach to last seen task id
+            const fallback = seen.slice().reverse().find(id=>id);
+            if(fallback){ t.inputs = [fallback]; fixed++; }
+          }
+        }
+        seen.push(t.id);
+      });
+      if(fixed){ logger.info('Planner graph sanitized', { fixed }); }
+    }
+  } catch(saniErr){ logger.error('Graph sanitize failed', saniErr.message); }
   // Pre-generate run id so executor can attach artifacts
   const runId = require('crypto').randomUUID();
   graph.run_id = runId;

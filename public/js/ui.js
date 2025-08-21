@@ -173,7 +173,7 @@ const UIManager = {
                 }
                 this.updateConnectionStatus('server', false);
             }
-        }, 30000); // Check every 30 seconds
+    }, 45000); // Reduced frequency for compact UI
     },
 
     // Update connection status in UI
@@ -194,14 +194,13 @@ const UIManager = {
         const short = mapping[service] || service;
         if (short) {
             const dot = document.getElementById(`status-${short}`);
-            const label = document.getElementById(`label-${short}`);
             if (dot) {
                 dot.classList.remove('connected', 'disconnected', 'partial');
                 dot.classList.add(isConnected ? 'connected' : 'disconnected');
-                if (label) {
-                    label.textContent = label.textContent.split(' ')[0]; // keep short
-                }
+                dot.setAttribute('title', `${short.toUpperCase()}: ${isConnected?'OK':'KO'}` + (details? `\n${details}`:''));
             }
+            const label = document.getElementById(`label-${short}`);
+            if(label){ label.style.display='none'; }
         }
 
         // Update per-service meta UI (last checked + error details) if elements exist
@@ -212,14 +211,8 @@ const UIManager = {
             const lastEl = document.getElementById(`meta-${idKey}-last`);
             const errEl = document.getElementById(`meta-${idKey}-error`);
 
-            if (lastEl) lastEl.textContent = `Ultimo controllo: ${new Date(now).toLocaleString()}`;
-            if (details && errEl) {
-                errEl.style.display = 'block';
-                const span = errEl.querySelector('span');
-                if (span) span.textContent = details;
-            } else if (errEl) {
-                errEl.style.display = 'none';
-            }
+            if (lastEl) lastEl.style.display = 'none';
+            if (errEl) errEl.style.display = 'none';
 
             // Update service meta in state as well
             StateManager.setServiceMeta(service, { lastChecked: now, lastError: details || null });
@@ -598,95 +591,25 @@ window.handleKeyDown = (event) => UIManager.handleKeyDown(event);
 
 // Expose a function to trigger an immediate service check from the header
 window.checkServiceNow = async (service) => {
-    // Enhanced check with retries and metadata
-    const maxAttempts = 4;
-    const baseDelay = 800; // ms
-
-    // Google uses OAuth flow: show confirmation modal first
-    if (service === 'google') {
-        // Open confirmation modal
+    if(service==='google'){
         const modal = document.getElementById('oauthModal');
         if (modal) modal.style.display = 'flex';
-        // store pending service on window for modal confirm
         window.__pendingOauth = 'google';
         return;
     }
-
-    UIManager.showToast(`Verifica ${service} in corso...`, 'info');
-
-    let attempt = 0;
-    let lastError = null;
-
-    while (attempt < maxAttempts) {
-        attempt++;
-        try {
-            // Update attempt counter in state meta
-            StateManager.setServiceMeta(service, { attempts: attempt, lastError: null });
-
-            const payload = { service, credentials: {} };
-            const resp = await fetch(`${CONFIG.API_BASE}/api/test/connection`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
-                body: JSON.stringify(payload)
-            });
-
-            const result = await resp.json();
-
-            const now = new Date().toISOString();
-            StateManager.setServiceMeta(service, { lastChecked: now });
-
-            if (result.success) {
-                UIManager.showToast(`${service} OK`, 'success');
-                StateManager.setConnectionStatus(service, true);
-                StateManager.setServiceMeta(service, { lastError: null, attempts: attempt });
-                UIManager.updateConnectionStatus(service, true);
-                // Update visible meta UI
-                const lastEl = document.getElementById(`meta-${service === 'database' ? 'db' : service}-last`);
-                if (lastEl) lastEl.textContent = `Ultimo controllo: ${new Date(now).toLocaleString()}`;
-                const errEl = document.getElementById(`meta-${service === 'database' ? 'db' : service}-error`);
-                if (errEl) errEl.style.display = 'none';
-                return;
-            } else {
-                lastError = result.error || 'Errore sconosciuto';
-                StateManager.setServiceMeta(service, { lastError, attempts: attempt });
-                UIManager.showToast(`${service} KO: ${lastError}`, 'warning');
-                StateManager.setConnectionStatus(service, false);
-                UIManager.updateConnectionStatus(service, false);
-
-                // Update visible meta UI
-                const lastEl = document.getElementById(`meta-${service === 'database' ? 'db' : service}-last`);
-                if (lastEl) lastEl.textContent = `Ultimo controllo: ${new Date().toLocaleString()}`;
-                const errEl = document.getElementById(`meta-${service === 'database' ? 'db' : service}-error`);
-                if (errEl) {
-                    errEl.style.display = 'block';
-                    errEl.querySelector('span').textContent = lastError;
-                }
-            }
-
-        } catch (err) {
-            lastError = err.message || String(err);
-            StateManager.setServiceMeta(service, { lastError, attempts: attempt });
-            UIManager.showToast(`${service} errore: ${lastError}`, 'error');
-            StateManager.setConnectionStatus(service, false);
-            UIManager.updateConnectionStatus(service, false);
-
-            const lastEl = document.getElementById(`meta-${service === 'database' ? 'db' : service}-last`);
-            if (lastEl) lastEl.textContent = `Ultimo controllo: ${new Date().toLocaleString()}`;
-            const errEl = document.getElementById(`meta-${service === 'database' ? 'db' : service}-error`);
-            if (errEl) {
-                errEl.style.display = 'block';
-                errEl.querySelector('span').textContent = lastError;
-            }
-        }
-
-        // Backoff delay before next attempt
-        const delay = baseDelay * Math.pow(2, attempt - 1);
-        await new Promise(r => setTimeout(r, delay));
+    try {
+        const resp = await fetch(`${CONFIG.API_BASE}/api/status/services`, { credentials:'include' });
+        if(!resp.ok) throw new Error('status_http_'+resp.status);
+        const data = await resp.json();
+        const ok = data.services?.[service === 'database' ? 'database' : service];
+        StateManager.setConnectionStatus(service, !!ok);
+        UIManager.updateConnectionStatus(service, !!ok);
+        UIManager.showToast(`${service} ${ok?'OK':'KO'}`, ok?'success':'warning');
+    } catch(e){
+        StateManager.setConnectionStatus(service,false);
+        UIManager.updateConnectionStatus(service,false);
+        UIManager.showToast(`${service} errore`, 'error');
     }
-
-    // After attempts exhausted
-    UIManager.showToast(`${service} non disponibile dopo ${maxAttempts} tentativi`, 'error');
 };
 
 // Modal handlers for Google OAuth

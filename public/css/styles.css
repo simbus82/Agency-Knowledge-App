@@ -127,79 +127,12 @@
 }
 
 /* Per-service status badges */
-.services-status {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-}
-
-.service-status {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: rgba(255,255,255,0.06);
-    padding: 6px 8px;
-    border-radius: 10px;
-    color: white;
-    font-size: 12px;
-}
-
-.service-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--warning);
-    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-}
-
-.service-label {
-    color: white;
-    opacity: 0.95;
-    font-weight: 600;
-}
-
+.services-status { display:flex; align-items:center; gap:6px; }
+.service-status { display:flex; align-items:center; }
+.service-dot { width:10px; height:10px; border-radius:50%; background: var(--warning); box-shadow:0 0 0 1px rgba(255,255,255,0.25); }
 .service-dot.connected { background: var(--success); }
 .service-dot.disconnected { background: var(--danger); }
-.service-dot.partial { background: var(--warning); }
-
-.service-check-btn {
-    background: rgba(255,255,255,0.08);
-    color: white;
-    border: 1px solid rgba(255,255,255,0.12);
-    padding: 6px 8px;
-    border-radius: 8px;
-    font-size: 12px;
-    cursor: pointer;
-}
-
-.service-check-btn:hover {
-    background: rgba(255,255,255,0.12);
-    transform: translateY(-1px);
-}
-
-.service-meta {
-    position: absolute;
-    top: 100%; /* Position it below the parent container */
-    left: 0;
-    margin-top: 5px; /* A small gap */
-    background: rgba(0,0,0,0.8);
-    backdrop-filter: blur(5px);
-    color: white;
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-size: 12px;
-    display: none;
-    z-index: 50;
-    min-width: 180px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-}
-
-.service-status { position: relative; }
-
-.service-status:hover .service-meta { display: block; }
-
-.meta-last { opacity: 0.9; margin-bottom: 6px; }
-.meta-error { color: var(--danger); font-weight: 600; }
+.service-label, .service-check-btn, .service-meta, .meta-last, .meta-error { display:none !important; }
 
 /* Modal (simple) */
 .modal {

@@ -29,7 +29,8 @@ async function executeGraph(graph){
       store[task.id] = retrieved;
       try { db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [graph.run_id||null, `retrieve:${task.id}`, JSON.stringify(retrieved.slice(0,20))]); } catch(e){}
     } else if(task.type==='annotate'){
-      let current = task.inputs.flatMap(id => store[id]||[]);
+  if(!Array.isArray(task.inputs) || !task.inputs.length) throw new Error(`task_inputs_missing:${task.id}`);
+  let current = task.inputs.flatMap(id => store[id]||[]);
       if(task.annotators.includes('basic')) current = annotateBasic(current);
   if(task.annotators.includes('entities')) current = await annotateEntities(current);
       if(task.annotators.includes('dates')) current = annotateDates(current);
@@ -39,8 +40,9 @@ async function executeGraph(graph){
       store[task.id] = current;
   try { db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [graph.run_id||null, `annotate:${task.id}`, JSON.stringify(current.slice(0,30))]); } catch(e){}
     } else if(task.type==='correlate'){
-      // naive correlation: group by product entities
-      const inputs = task.inputs.flatMap(id=>store[id]||[]);
+  if(!Array.isArray(task.inputs) || !task.inputs.length) throw new Error(`task_inputs_missing:${task.id}`);
+  // naive correlation: group by product entities
+  const inputs = task.inputs.flatMap(id=>store[id]||[]);
       const map = new Map();
       for(const c of inputs){
         (c.entities||[]).filter(e=>e.type==='product').forEach(e=>{
@@ -51,17 +53,20 @@ async function executeGraph(graph){
       }
       store[task.id] = Array.from(map.entries()).map(([product, chunks])=>({ product, chunks }));
     } else if(task.type==='reason'){
-      const inputs = task.inputs.flatMap(id => store[id]||[]);
+  if(!Array.isArray(task.inputs) || !task.inputs.length) throw new Error(`task_inputs_missing:${task.id}`);
+  const inputs = task.inputs.flatMap(id => store[id]||[]);
       const reasoned = await reason(inputs, task.goal);
       store[task.id] = reasoned;
       try { db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [graph.run_id||null, `reason:${task.id}`, JSON.stringify(reasoned)]); } catch(e){}
     } else if(task.type==='validate'){
-  const inputs = task.inputs.flatMap(id => store[id]||[]);
+	if(!Array.isArray(task.inputs) || !task.inputs.length) throw new Error(`task_inputs_missing:${task.id}`);
+	const inputs = task.inputs.flatMap(id => store[id]||[]);
   // Attempt to find last annotate set for entity-level conflicts
   const annotated = Object.values(store).find(v=>Array.isArray(v) && v.some(c=>c.entities||c.labels));
   store[task.id] = validate(inputs, annotated || []);
     } else if(task.type==='compose'){
-      const inputs = task.inputs.flatMap(id => store[id]||[]);
+  if(!Array.isArray(task.inputs) || !task.inputs.length) throw new Error(`task_inputs_missing:${task.id}`);
+  const inputs = task.inputs.flatMap(id => store[id]||[]);
       store[task.id] = compose(inputs, task.format);
     }
   }

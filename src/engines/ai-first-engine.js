@@ -4,16 +4,22 @@ const axios = require('axios');
 class AIFirstEngine {
 	constructor() {
 		this.claudeApiKey = process.env.CLAUDE_API_KEY;
-		this.modelId = process.env.CLAUDE_MODEL || 'claude-3-sonnet-20241022';
+		this.modelId = process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
+	}
+
+	mapLegacyModel(id){
+		const map = { 'claude-3-sonnet-20241022':'claude-sonnet-4-20250514', 'sonnet-20241022':'claude-sonnet-4-20250514' };
+		return map[id] || id;
 	}
 
 	async processQuery(messages, context) {
 		try {
+			if(context && context.selectedModel){ this.modelId = this.mapLegacyModel(context.selectedModel); }
 			const { latestUserMessage, conversationSummary } = await this.buildConversationMemory(messages);
 			console.log('🤖 AI analyzing query:', latestUserMessage);
 			const analysis = await this.analyzeQueryWithAI(latestUserMessage, context, conversationSummary);
 			console.log('📊 Fetching data based on AI analysis...');
-			const relevantData = await this.fetchDataBasedOnAIAnalysis(analysis, context);
+			const relevantData = await this.fetchDataBasedOnAIAnalysis(analysis, context, latestUserMessage);
 			console.log('✨ Generating AI response...');
 			const response = await this.generateResponseWithAI(latestUserMessage, relevantData, analysis, context, conversationSummary);
 			return response;
@@ -127,7 +133,7 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
 		};
 	}
 
-	async fetchDataBasedOnAIAnalysis(analysis, context) {
+	async fetchDataBasedOnAIAnalysis(analysis, context, originalQuery='') {
 		const data = { clickup: null, drive: null, metadata: analysis };
 		if (!analysis.requiresData) { console.log('ℹ️ AI determined no data fetching needed'); return data; }
 		if (analysis.searchParameters?.clickup?.needed && context.clickupToken) {
@@ -136,7 +142,7 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
 		}
 		if (analysis.searchParameters?.drive?.needed && context.googleAccessToken) {
 			console.log('📁 Fetching Drive data...');
-			data.drive = await this.fetchDriveData(analysis, context);
+			data.drive = await this.fetchDriveData(analysis, context, originalQuery);
 		}
 		return data;
 	}
@@ -251,28 +257,69 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
 		} catch (error) { console.error('ClickUp fetch error:', error.response?.data || error.message); return null; }
 	}
 
-	async fetchDriveData(analysis, context) {
+	// Build prioritized search terms leveraging AI analysis entities (projects/clients/brands) + AI suggested terms + heuristic extraction
+	buildDriveSearchTerms(analysis, originalQuery='') {
+		const scored = new Map(); // term -> score
+		function add(term, score){
+			if(!term) return; const clean = term.trim().replace(/\s+/g,' ').slice(0,80);
+			if(!clean) return; const prev = scored.get(clean) || 0; scored.set(clean, Math.max(prev, score));
+		}
+		// AI entities high priority
+		(analysis.entities?.projects||[]).forEach(p=>add(p, 4));
+		(analysis.entities?.clients||[]).forEach(c=>add(c, 4));
+		(analysis.entities?.brands||[]).forEach(b=>add(b, 3.5));
+		// AI suggested search terms
+		(analysis.searchParameters?.drive?.searchTerms||[]).forEach(t=>add(t, 2.5));
+		// Keywords (lower weight)
+		(analysis.entities?.keywords||[]).forEach(k=> add(k, 1.5));
+		// Heuristic: quoted phrases
+		(originalQuery.match(/"([^"]{3,80})"/g)||[]).forEach(q=> add(q.replace(/"/g,''), 3));
+		// Heuristic: capitalized multi-word sequences (potential project names)
+		(originalQuery.match(/(?:[A-Z][a-zA-Z0-9]{2,}(?:\s+|$)){1,4}/g)||[]).forEach(seq=> add(seq.trim(), 2.2));
+		// Length bonus
+		for(const [term,score] of Array.from(scored.entries())){
+			const lenBonus = term.split(/\s+/).length > 1 ? 0.8 : (term.length>10?0.4:0);
+			scored.set(term, score + lenBonus);
+		}
+		return Array.from(scored.entries())
+			.sort((a,b)=> b[1]-a[1])
+			.filter(([t])=> t.length>2)
+			.slice(0,8)
+			.map(([t])=>t);
+	}
+
+	async fetchDriveData(analysis, context, originalQuery='') {
 		if (!context.googleAccessToken) { console.log('⚠️ Google Drive not configured'); return null; }
 		try {
 			const searchParams = analysis.searchParameters.drive;
+			const prioritized = this.buildDriveSearchTerms(analysis, originalQuery);
+			console.log('🔎 Drive prioritized terms:', prioritized);
 			const allResults = [];
-			const searchTerms = searchParams.searchTerms || [];
-			for (const term of searchTerms.slice(0, 3)) {
-				let query = `name contains '${term}'`;
+			for (const term of prioritized) {
+				const escaped = term.replace(/'/g,"\\'");
+				const qParts = [`(name contains '${escaped}' or fullText contains '${escaped}')`, 'trashed = false'];
 				if (searchParams.dateFilter && searchParams.dateFilter !== 'all') {
 					const dateFilter = this.getDateFilterForDrive(searchParams.dateFilter);
-					if (dateFilter) { query += ` and ${dateFilter}`; }
+					if (dateFilter) qParts.push(dateFilter);
 				}
-				console.log(`🔍 Drive search: ${query}`);
-				const response = await axios.get('https://www.googleapis.com/drive/v3/files', {
-					headers: { 'Authorization': `Bearer ${context.googleAccessToken}` },
-					params: {
-						q: `fullText contains '${searchTerms}'`,
-						fields: 'files(id, name, mimeType, webViewLink, createdTime, modifiedTime, owners, parents, description, shared, driveId)',
-						corpora: 'allDrives', includeItemsFromAllDrives: true, supportsAllDrives: true
-					}
-				});
-				if (response.data.files.length > 0) { allResults.push(...response.data.files); }
+				const q = qParts.join(' and ');
+				console.log(`🔍 Drive search q: ${q}`);
+				let response;
+				try {
+					response = await axios.get('https://www.googleapis.com/drive/v3/files', {
+						headers: { 'Authorization': `Bearer ${context.googleAccessToken}` },
+						params: {
+							q,
+							fields: 'files(id, name, mimeType, webViewLink, createdTime, modifiedTime, owners, parents, description, shared, driveId)',
+							corpora: 'allDrives', includeItemsFromAllDrives: true, supportsAllDrives: true, pageSize: 20
+						}
+					});
+				} catch(searchErr){
+					console.warn('Drive search error for term', term, searchErr.response?.data?.error?.message || searchErr.message);
+					continue;
+				}
+				if (response.data.files?.length > 0) { allResults.push(...response.data.files); }
+				if (allResults.length > 40) break; // cap
 			}
 			const uniqueResults = Array.from(new Map(allResults.map(f => [f.id, f])).values());
 			if (uniqueResults.length > 0 && uniqueResults.length <= 3) {

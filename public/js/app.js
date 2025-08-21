@@ -221,6 +221,17 @@ async function sendMessage() {
     const userMessage = input.value.trim();
     
     if (!userMessage || StateManager.getState().isLoading) return;
+
+    // Fail-safe: ensure selected model is valid
+    const state = StateManager.getState();
+    const availableIds = (state.models||[]).map(m=>m.id);
+    if(state.selectedModel && availableIds.length && !availableIds.includes(state.selectedModel)){
+        UIManager.showToast('Modello non valido. Seleziona un modello disponibile prima di inviare.', 'error');
+        if(input) input.disabled = true;
+        const selector = document.getElementById('modelSelector');
+        if(selector){ selector.classList.add('warning'); selector.setAttribute('title','Modello non valido'); }
+        return;
+    }
     
     // Add user message to UI
     UIManager.addMessage('user', userMessage);
@@ -435,6 +446,10 @@ function changeModel() {
     const selector = document.getElementById('modelSelector');
     const selectedModel = selector.value;
     StateManager.setState({ selectedModel });
+    // Re-enable if was disabled due to invalid selection
+    const input = document.getElementById('userInput');
+    if(input) input.disabled = false;
+    selector.classList.remove('warning');
     UIManager.showToast('Modello cambiato', 'success');
 }
 
