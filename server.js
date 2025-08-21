@@ -133,11 +133,19 @@ db.serialize(() => {
     embedding TEXT,     -- JSON array (MVP simple embedding)
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
-  // Add embedding column if upgrading from older version without it
-  try { db.run('ALTER TABLE rag_chunks ADD COLUMN embedding BLOB'); } catch(e) { /* ignore */ }
-  // Add optional offset columns for future hard grounding (start/end character positions in original source)
-  try { db.run('ALTER TABLE rag_chunks ADD COLUMN src_start INTEGER'); } catch(e){}
-  try { db.run('ALTER TABLE rag_chunks ADD COLUMN src_end INTEGER'); } catch(e){}
+  // Safe column add helper (avoids duplicate column async errors)
+  function ensureColumn(table, name, ddl){
+    db.all(`PRAGMA table_info(${table})`, (err, cols)=>{
+      if(err) return;
+      if(!cols.some(c=>c.name===name)){
+        db.run(`ALTER TABLE ${table} ADD COLUMN ${ddl}`, (e)=>{ if(e) console.error(`[DB] add column ${table}.${name} failed`, e.message); });
+      }
+    });
+  }
+  // Ensure new columns for older DBs
+  ensureColumn('rag_chunks','embedding','embedding BLOB');
+  ensureColumn('rag_chunks','src_start','src_start INTEGER');
+  ensureColumn('rag_chunks','src_end','src_end INTEGER');
 
   // RAG run logs (execution telemetry)
   db.run(`CREATE TABLE IF NOT EXISTS rag_runs (
