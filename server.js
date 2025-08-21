@@ -17,6 +17,9 @@ require('dotenv').config();
 
 // Import AI-First Engine (new structured path)
 const AIFirstEngine = require('./src/engines/ai-first-engine');
+// RAG generalized modules (MVP)
+const { plan } = require('./src/rag/planner/planner');
+const { executeGraph } = require('./src/rag/executor/executeGraph');
 // Legacy engines removed (AIExecutiveEngine, BusinessIntelligence)
 
 const app = express();
@@ -109,6 +112,20 @@ db.serialize(() => {
     error TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+
+  // RAG chunks table (generalized multi-source knowledge units)
+  db.run(`CREATE TABLE IF NOT EXISTS rag_chunks (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    source TEXT,        -- e.g. drive|clickup|manual
+    type TEXT,          -- sheet_row|doc_par|task|comment|other
+    path TEXT,          -- file path or task identifier
+    loc TEXT,           -- line / row / page reference
+    embedding TEXT,     -- JSON array (MVP simple embedding)
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  // Add embedding column if upgrading from older version without it
+  try { db.run('ALTER TABLE rag_chunks ADD COLUMN embedding BLOB'); } catch(e) { /* ignore */ }
 });
 
 // Logger
@@ -885,6 +902,23 @@ app.post('/api/claude/message', async (req, res) => {
         message: 'Mi dispiace, si è verificato un errore. Riprova tra qualche istante.'
       });
     }
+  }
+});
+
+// Generalized RAG endpoint (planner + executor) - experimental
+app.post('/api/rag/chat', async (req, res) => {
+  if(!req.session.user){
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  try {
+    const { message } = req.body;
+    if(!message) return res.status(400).json({ error: 'message required' });
+    const graph = plan(message);
+    const result = await executeGraph(graph);
+    res.json({ query: message, graph, result });
+  } catch(e){
+    logger.error('RAG endpoint error', e.message || e);
+    res.status(500).json({ error: 'rag_failed' });
   }
 });
 
