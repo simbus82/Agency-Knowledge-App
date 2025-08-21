@@ -21,16 +21,16 @@ Esempio: Open PowerShell, posizionarsi nella cartella del progetto e lanciare:
     .\update-from-github.ps1
 #>
 
-Write-Host "🔄 Aggiornamento 56k Knowledge Hub da GitHub..." -ForegroundColor Green
-if($DryRun){ Write-Host "(DRY RUN - nessuna modifica persistente verrà applicata)" -ForegroundColor Yellow }
+Write-Host "Updating 56k Knowledge Hub from GitHub..." -ForegroundColor Green
+if($DryRun){ Write-Host "(DRY RUN - no persistent changes)" -ForegroundColor Yellow }
 try {
     $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
 } catch { $version = 'unknown' }
-Write-Host "📦 Versione corrente (package.json): $version" -ForegroundColor Yellow
+Write-Host "Current version (package.json): $version" -ForegroundColor Yellow
 
-function Write-Info([string]$m){ Write-Host "✅ $m" -ForegroundColor Green }
-function Write-Warn([string]$m){ Write-Host "⚠️  $m" -ForegroundColor Yellow }
-function Write-ErrorCustom([string]$m){ Write-Host "❌ $m" -ForegroundColor Red }
+function Write-Info([string]$m){ Write-Host "[INFO] $m" -ForegroundColor Green }
+function Write-Warn([string]$m){ Write-Host "[WARN] $m" -ForegroundColor Yellow }
+function Write-ErrorCustom([string]$m){ Write-Host "[ERROR] $m" -ForegroundColor Red }
 
 # Step 0: Verifica versione Node / Git
 try { $nodeVer = (node -v) } catch { $nodeVer = 'node NON trovato' }
@@ -129,14 +129,14 @@ if (-not $DryRun -and (Get-Command npm -ErrorAction SilentlyContinue)) {
 
 # Step 6: Final info and git log
 Write-Host ""
-Write-Info "🎉 Aggiornamento completato!"
+Write-Info "Update completed."
 if($stashLabel){ Write-Host "   Stash creato: $stashLabel (usa 'git stash list' / 'git stash pop')" }
 if($DryRun){ Write-Warn "DRY RUN: nessun file modificato permanentemente" }
 Write-Host ""
-Write-Host "📋 Prossimi passi:"
+Write-Host "Next steps:" 
 Write-Host "   1. Avvia il backend: npm start"
 Write-Host "   2. Avvia il frontend (se separato): npm run frontend o secondo la documentazione"
 Write-Host "   3. Vai su: http://localhost:8080 (o porta configurata)"
 Write-Host ""
-Write-Host "📝 Ultimi commit:"
+Write-Host "Recent commits:"
 try { git --no-pager log --oneline -5 } catch { }

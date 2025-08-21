@@ -26,21 +26,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo "🔄 Aggiornamento 56k Knowledge Hub da GitHub (branch: $BRANCH)..."
-[[ "$DRY_RUN" == true ]] && echo "(DRY RUN - nessuna modifica persistente)"
+echo "Updating 56k Knowledge Hub from GitHub (branch: $BRANCH)..."
+[[ "$DRY_RUN" == true ]] && echo "(DRY RUN - no persistent changes)"
 VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "unknown")
-echo "📦 Versione corrente (package.json): $VERSION"
+echo "Current version (package.json): $VERSION"
 
 # Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # Funzione per log colorati
-log_info() { echo -e "${GREEN}✅ $1${NC}"; }
-log_warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
-log_error() { echo -e "${RED}❌ $1${NC}"; }
+log_info() { echo -e "${GREEN}[INFO] $1${NC}"; }
+log_warn() { echo -e "${YELLOW}[WARN] $1${NC}"; }
+log_error() { echo -e "${RED}[ERROR] $1${NC}"; }
 
 # Step 0: Checks
 if ! command -v git >/dev/null 2>&1; then log_warn "Git non trovato"; fi
@@ -142,12 +142,12 @@ log_info "🎉 Aggiornamento completato!"
 [[ "$DRY_RUN" == true ]] && log_warn "Dry run: nessuna modifica persistente" || true
 [[ -n "${STASH_LABEL:-}" ]] && echo "   Stash: $STASH_LABEL (git stash list)"
 echo ""
-echo "📋 Prossimi passi:"
+echo "Next steps:"
 echo "   1. Avvia il backend: npm start"
 echo "   2. Avvia il frontend: npm run frontend"
 echo "   3. Vai su: http://localhost:8080"
 echo ""
 
 # Show latest changes
-echo "📝 Ultimi aggiornamenti:"
+echo "Recent commits:"
 git log --oneline -5
