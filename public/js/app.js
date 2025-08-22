@@ -81,6 +81,19 @@ const App = {
             this.loadDynamicQueries()
         ]);
 
+        // Aggiorna immediatamente lo stato dei servizi (inclusi ClickUp / Drive) lato utente
+        try {
+            const resp = await fetch(`${CONFIG.API_BASE}/api/status/services`, { credentials: 'include' });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.services) {
+                    Object.entries(data.services).forEach(([svc, ok]) => {
+                        StateManager.setConnectionStatus(svc, !!ok);
+                    });
+                }
+            }
+        } catch(e){ console.warn('Impossibile recuperare stato servizi iniziale', e); }
+
     // Load app version (non-blocking)
     this.loadAppVersion();
         
@@ -216,6 +229,47 @@ const App = {
 };
 
 // Message handling functions
+// --- Conversational history compaction helpers ---
+const HISTORY_LIMIT_FULL = 16;              // Fino a questa soglia inviamo tutto
+const HISTORY_RECENT_TO_KEEP = 10;          // Ultimi N messaggi sempre inviati
+const HISTORY_SUMMARY_MAX_CHARS = 800;      // Limite caratteri per riassunto
+const HISTORY_MAX_BULLETS = 12;             // Max bullet sintetici
+
+function buildLocalConversationSummary(earlierMessages){
+    if(!earlierMessages.length) return '';
+    const bullets = [];
+    for(let i=0;i<earlierMessages.length && bullets.length < HISTORY_MAX_BULLETS;i++){
+        const m = earlierMessages[i];
+        const raw = (m.content||'').replace(/\s+/g,' ').trim();
+        if(!raw) continue;
+        if(m.type === 'user'){
+            bullets.push(`• Utente: ${raw.slice(0,140)}${raw.length>140?'…':''}`);
+        } else if(m.type === 'ai') {
+            // Prendi solo la prima frase/periodo per l'AI
+            const firstSentence = raw.split(/(?<=[.!?])\s+/)[0] || raw;
+            bullets.push(`• AI: ${firstSentence.slice(0,160)}${firstSentence.length>160?'…':''}`);
+        }
+    }
+    let summary = bullets.join('\n');
+    if(summary.length > HISTORY_SUMMARY_MAX_CHARS){
+        summary = summary.slice(0, HISTORY_SUMMARY_MAX_CHARS-1) + '…';
+    }
+    return summary;
+}
+
+function buildCondensedMessagePayload(){
+    const msgs = (StateManager.getState().currentMessages || []);
+    // Se sotto soglia invia tutto (mappando type -> role)
+    if(msgs.length <= HISTORY_LIMIT_FULL){
+        return msgs.map(m=> ({ role: m.type === 'ai' ? 'assistant' : 'user', content: m.content }));
+    }
+    const recent = msgs.slice(-HISTORY_RECENT_TO_KEEP);
+    const earlier = msgs.slice(0, msgs.length - HISTORY_RECENT_TO_KEEP);
+    const summary = buildLocalConversationSummary(earlier);
+    const systemSummary = summary ? [{ role: 'system', content: 'Riassunto conversazione precedente (compact):\n'+summary }] : [];
+    return [ ...systemSummary, ...recent.map(m=> ({ role: m.type === 'ai' ? 'assistant' : 'user', content: m.content })) ];
+}
+
 async function sendMessage() {
     const input = document.getElementById('userInput');
     const userMessage = input.value.trim();
@@ -294,7 +348,8 @@ async function sendMessage() {
                 credentials: 'include',
                 signal: controller.signal,
                 body: JSON.stringify({
-                    messages: [ { role: 'user', content: userMessage } ],
+                    // Cronologia compatta: summary locale + ultimi turni
+                    messages: buildCondensedMessagePayload(),
                     model: StateManager.getState().selectedModel
                 })
             });
