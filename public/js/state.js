@@ -9,7 +9,7 @@ let state = {
     conversations: [],
     models: [],
     selectedModel: null,
-    mode: 'chat', // 'chat' or 'rag'
+    mode: 'rag', // unified knowledge-first mode
     isLoading: false,
     hasClickUp: false,
     currentMessages: [],

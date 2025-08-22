@@ -4,6 +4,7 @@ const axios = require('axios');
 const CLAUDE_MODEL_PLANNER = process.env.CLAUDE_RAG_PLANNER_MODEL || 'claude-sonnet-4-20250514';
 const CLAUDE_MODEL_ANNOTATORS = process.env.CLAUDE_RAG_ANNOTATOR_MODEL || CLAUDE_MODEL_PLANNER;
 const CLAUDE_MODEL_REASONER = process.env.CLAUDE_RAG_REASONER_MODEL || CLAUDE_MODEL_PLANNER;
+const CLAUDE_MODEL_UTILITY = process.env.CLAUDE_RAG_UTILITY_MODEL || 'claude-3-haiku-20240307';
 
 async function claudeRequest(model, prompt, maxTokens = 1200, temperature = 0){
   if(!process.env.CLAUDE_API_KEY){

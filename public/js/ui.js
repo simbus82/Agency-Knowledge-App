@@ -336,20 +336,36 @@ const UIManager = {
             avatarContent = 'AI';
         }
         
+        const msgId = 'message-'+Date.now();
         messageDiv.innerHTML = `
             <div class="message-avatar">${avatarContent}</div>
-            <div class="message-content" id="message-${Date.now()}"></div>
+            <div class="message-content" id="${msgId}"></div>
         `;
         
         messages.appendChild(messageDiv);
         
         // Render markdown content
         const contentElement = messageDiv.querySelector('.message-content');
-        if (type === 'ai') {
-            // Use markdown processor for AI responses
-            MarkdownProcessor.renderMarkdown(contentElement, content);
+                if (type === 'ai') {
+            if(options.rawHtml){
+                // Assume content already sanitized / processed
+                contentElement.innerHTML = content;
+            } else {
+                MarkdownProcessor.renderMarkdown(contentElement, content);
+            }
+                        // Intent badge injection if provided
+                        if(options.intent){
+                                const metaBar = document.createElement('div');
+                                metaBar.className = 'intent-badge-bar';
+                                metaBar.innerHTML = `
+                                    <span class="badge badge-intent">${options.intent.action}</span>
+                                    ${options.intent.time_range? `<span class="badge badge-time">${options.intent.time_range}</span>`:''}
+                                    ${(options.intent.entities?.projects||[]).slice(0,2).map(p=>`<span class=\"badge badge-entity\">${p}</span>`).join('')}
+                                    ${(options.intent.entities?.clients||[]).slice(0,2).map(c=>`<span class=\"badge badge-entity client\">${c}</span>`).join('')}
+                                `;
+                                messageDiv.insertBefore(metaBar, messageDiv.querySelector('.message-content'));
+                        }
         } else {
-            // Plain text for user messages
             contentElement.textContent = content;
         }
         
@@ -418,7 +434,7 @@ const UIManager = {
                 const re = new RegExp(token,'i');
                 snippet = snippet.replace(re, m=>`<mark data-abs-start="${sp.absolute_start||''}" data-abs-end="${sp.absolute_end||''}">${m}</mark>`);
             });
-            return `<div class="rag-support" data-chunk="${s.id||''}"><div class="rag-support-title">S${i+1}</div><div class="rag-support-body">${snippet}</div></div>`;
+            return `<div class="rag-support" id="support-S${i+1}" data-chunk="${s.id||''}"><div class="rag-support-title">S${i+1}</div><div class="rag-support-body">${snippet}</div></div>`;
         }).join('');
         wrapper.innerHTML = `
             <div class="rag-section"><h4>Conclusioni</h4>${conclusionsHtml}</div>

@@ -87,3 +87,12 @@
 :root[data-theme="dark"] .rag-conclusion { background:#232a36; border-color:#2F3846; }
 :root[data-theme="dark"] .rag-support { background:#232a36; border-color:#2F3846; }
 :root[data-theme="dark"] .rag-support-body mark { background:#b45309; color:#fff; }
+
+/* Intent & entity badges */
+.intent-badge-bar { display:flex; flex-wrap:wrap; gap:4px; margin:2px 0 6px 48px; }
+.badge-intent { background:#4a63e7; color:#fff; padding:2px 6px; border-radius:4px; font-size:11px; font-weight:600; letter-spacing:.5px; text-transform:uppercase; }
+.badge-time { background:#2f855a; color:#fff; padding:2px 6px; border-radius:4px; font-size:11px; font-weight:500; }
+.badge-entity { background:#e2e8f0; color:#1a202c; padding:2px 6px; border-radius:4px; font-size:11px; font-weight:500; }
+:root[data-theme='dark'] .badge-entity { background:#2d3748; color:#edf2f7; }
+.badge-entity.client { background:#f6ad55; color:#3d2e00; }
+:root[data-theme='dark'] .badge-entity.client { background:#dd6b20; color:#fff; }

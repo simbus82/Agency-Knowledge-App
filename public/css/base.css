@@ -54,6 +54,11 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 
+/* Source reference highlighting */
+.rag-support.highlight { outline: 2px solid var(--accent-color, #4b74ff); background: rgba(75,116,255,0.08); transition: background .3s; }
+.source-ref { color: var(--accent-color, #4b74ff); font-weight: 600; }
+.source-ref:hover { text-decoration: underline; }
+
 /* Shared loading screen */
 .loading-screen {
     position: fixed;

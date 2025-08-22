@@ -259,42 +259,107 @@ IMPORTANT: Respond ONLY with the JSON object, no other text.`;
 
 	// Build prioritized search terms leveraging AI analysis entities (projects/clients/brands) + AI suggested terms + heuristic extraction
 	buildDriveSearchTerms(analysis, originalQuery='') {
-		const scored = new Map(); // term -> score
-		function add(term, score){
-			if(!term) return; const clean = term.trim().replace(/\s+/g,' ').slice(0,80);
-			if(!clean) return; const prev = scored.get(clean) || 0; scored.set(clean, Math.max(prev, score));
+		// Kept for backward compatibility – now delegated to AI planner
+		return [];
+	}
+
+	async planDriveSearchWithAI(originalQuery, analysis){
+		const planningPrompt = `Sei un assistente che deve pianificare una ricerca su Google Drive per soddisfare la richiesta utente.
+Fornisci SOLO JSON valido con questo schema:
+{
+  "mode": "recency" | "term_search",
+  "dateFilter": "today"|"week"|"month"|"all",
+  "terms": ["..."] ,
+  "explanation": "breve spiegazione (IT)" 
+}
+Regole:
+- Usa mode=recency se l'utente chiede genericamente documenti/file aggiornati/modificati recentemente senza nomi specifici.
+- Usa term_search se ci sono nomi progetto, cliente, brand, oppure parole chiave specifiche utili a filtrare.
+- terms massimo 6, no parole generiche (documenti, file, oggi, mostra, list, updated, modified, recent, etc.).
+- Se mode=recency lascia terms come [].
+- dateFilter deriva dalla richiesta (oggi=>today, questa settimana=>week, ultimo mese=>month, altrimenti all).
+Richiesta utente: "${originalQuery}".
+Analisi AI (estratto): intent=${analysis.intent}; keywords=${(analysis.entities?.keywords||[]).join(', ')}.`;
+		try {
+			const resp = await axios.post('https://api.anthropic.com/v1/messages', {
+				model: this.modelId,
+				max_tokens: 400,
+				temperature: 0,
+				messages: [ { role: 'user', content: planningPrompt } ]
+			}, { headers: { 'x-api-key': this.claudeApiKey, 'anthropic-version':'2023-06-01','content-type':'application/json' } });
+			const txt = resp.data.content?.[0]?.text || '{}';
+			const clean = txt.replace(/```json|```/g,'').trim();
+			let plan; try { plan = JSON.parse(clean); } catch { plan = {}; }
+			if(!plan.mode){ plan.mode = 'term_search'; }
+			if(!['recency','term_search'].includes(plan.mode)) plan.mode='term_search';
+			if(!Array.isArray(plan.terms)) plan.terms=[];
+			return plan;
+		} catch(e){
+			return { mode:'term_search', dateFilter: analysis.searchParameters?.drive?.dateFilter || 'all', terms: this.buildDriveSearchTerms(analysis, originalQuery), explanation:'fallback' };
 		}
-		// AI entities high priority
-		(analysis.entities?.projects||[]).forEach(p=>add(p, 4));
-		(analysis.entities?.clients||[]).forEach(c=>add(c, 4));
-		(analysis.entities?.brands||[]).forEach(b=>add(b, 3.5));
-		// AI suggested search terms
-		(analysis.searchParameters?.drive?.searchTerms||[]).forEach(t=>add(t, 2.5));
-		// Keywords (lower weight)
-		(analysis.entities?.keywords||[]).forEach(k=> add(k, 1.5));
-		// Heuristic: quoted phrases
-		(originalQuery.match(/"([^"]{3,80})"/g)||[]).forEach(q=> add(q.replace(/"/g,''), 3));
-		// Heuristic: capitalized multi-word sequences (potential project names)
-		(originalQuery.match(/(?:[A-Z][a-zA-Z0-9]{2,}(?:\s+|$)){1,4}/g)||[]).forEach(seq=> add(seq.trim(), 2.2));
-		// Length bonus
-		for(const [term,score] of Array.from(scored.entries())){
-			const lenBonus = term.split(/\s+/).length > 1 ? 0.8 : (term.length>10?0.4:0);
-			scored.set(term, score + lenBonus);
-		}
-		return Array.from(scored.entries())
-			.sort((a,b)=> b[1]-a[1])
-			.filter(([t])=> t.length>2)
-			.slice(0,8)
-			.map(([t])=>t);
 	}
 
 	async fetchDriveData(analysis, context, originalQuery='') {
 		if (!context.googleAccessToken) { console.log('⚠️ Google Drive not configured'); return null; }
 		try {
 			const searchParams = analysis.searchParameters.drive;
-			const prioritized = this.buildDriveSearchTerms(analysis, originalQuery);
-			console.log('🔎 Drive prioritized terms:', prioritized);
-			const allResults = [];
+			// Ask AI for search plan (replaces pattern heuristics)
+			const plan = await this.planDriveSearchWithAI(originalQuery, analysis);
+			const effectiveDateFilter = plan.dateFilter || searchParams.dateFilter || 'all';
+			console.log('🧠 Drive AI plan:', plan);
+			if(plan.mode === 'recency'){
+				const qParts = ['trashed = false'];
+				if (effectiveDateFilter && effectiveDateFilter !== 'all') {
+					const dateFilter = this.getDateFilterForDrive(effectiveDateFilter);
+					if (dateFilter) qParts.push(dateFilter);
+				}
+				const q = qParts.join(' and ');
+				let response; try {
+					response = await axios.get('https://www.googleapis.com/drive/v3/files', {
+						headers: { 'Authorization': `Bearer ${context.googleAccessToken}` },
+						params: { q, orderBy:'modifiedTime desc', fields:'files(id,name,mimeType,webViewLink,createdTime,modifiedTime,owners,parents,description,shared,driveId)', corpora:'allDrives', includeItemsFromAllDrives:true, supportsAllDrives:true, pageSize:25 }
+					});
+				} catch(e){ console.warn('Drive recency plan error', e.response?.data?.error?.message||e.message); return []; }
+				const files = response.data.files || [];
+				if(files.length && files.length <=3){
+					for(const f of files){
+						try { const c = await axios.get(`https://www.googleapis.com/drive/v3/files/${f.id}/comments`, { headers:{Authorization:`Bearer ${context.googleAccessToken}`}, params:{ fields:'comments(author,content,createdTime)' } }); f.comments=c.data.comments||[]; f.comments_count=f.comments.length; } catch{}
+					}
+				}
+				console.log(`✅ Drive recency AI plan -> ${files.length} docs`);
+				return files;
+			}
+			// term_search mode
+			const terms = (plan.terms||[]).slice(0,8);
+			console.log('🔎 Drive AI terms:', terms);
+			if(!terms.length){
+				// fallback: single broad recency if no terms
+				plan.mode='recency';
+				return await this.fetchDriveData({ ...analysis, searchParameters:{ drive:{ needed:true, dateFilter: effectiveDateFilter } } }, context, originalQuery);
+			}
+			const resultsAccum=[];
+			for(const term of terms){
+				const escaped = term.replace(/'/g,"\\'");
+				const qParts=[`(name contains '${escaped}' or fullText contains '${escaped}')`,'trashed = false'];
+				if(effectiveDateFilter && effectiveDateFilter!=='all'){
+					const df = this.getDateFilterForDrive(effectiveDateFilter); if(df) qParts.push(df);
+				}
+				const q = qParts.join(' and ');
+				console.log('🔍 Drive term q:', q);
+				try {
+					const resp = await axios.get('https://www.googleapis.com/drive/v3/files', { headers:{Authorization:`Bearer ${context.googleAccessToken}`}, params:{ q, fields:'files(id,name,mimeType,webViewLink,createdTime,modifiedTime,owners,parents,description,shared,driveId)', corpora:'allDrives', includeItemsFromAllDrives:true, supportsAllDrives:true, pageSize:20 } });
+					if(resp.data.files?.length) resultsAccum.push(...resp.data.files);
+				} catch(e){ console.warn('Drive term search error', term, e.response?.data?.error?.message||e.message); }
+				if(resultsAccum.length>40) break;
+			}
+			const unique = Array.from(new Map(resultsAccum.map(f=>[f.id,f])).values());
+			if(unique.length && unique.length<=3){
+				for(const f of unique){
+					try { const c= await axios.get(`https://www.googleapis.com/drive/v3/files/${f.id}/comments`, { headers:{Authorization:`Bearer ${context.googleAccessToken}`}, params:{ fields:'comments(author,content,createdTime)' } }); f.comments=c.data.comments||[]; f.comments_count=f.comments.length; } catch{}
+				}
+			}
+			console.log(`✅ Found ${unique.length} Drive documents (AI term plan)`);
+			return unique;
 			for (const term of prioritized) {
 				const escaped = term.replace(/'/g,"\\'");
 				const qParts = [`(name contains '${escaped}' or fullText contains '${escaped}')`, 'trashed = false'];

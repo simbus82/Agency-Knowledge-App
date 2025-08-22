@@ -1042,133 +1042,95 @@ app.post('/api/claude/message', async (req, res) => {
 
 // Generalized RAG endpoint (planner + executor) - experimental
 app.post('/api/rag/chat', async (req, res) => {
-  if(!req.session.user){
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  try {
-    const { message, include_chunk_texts=false } = req.body;
-    if(!message) return res.status(400).json({ error: 'message required' });
-    const startTs = Date.now();
+  // Unified knowledge-first endpoint: retrieval + reasoning + conversational synthesis.
+  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
+  const { message, include_chunk_texts=false } = req.body || {};
+  if(!message) return res.status(400).json({ error:'message required' });
+  const startTs = Date.now();
+  const { parseIntent } = require('./src/rag/util/intentParser');
+  const { synthesizeConversationalAnswer } = require('./src/rag/synthesis/synthesizer');
+  const intent = parseIntent(message);
   let graph;
   try { graph = await plan(message); } catch(e){
     logger.error('Planner failed', e.message||e);
-    return res.status(500).json({ error:'planner_failed', message:'Pianificazione AI non disponibile. Verifica la chiave LLM o riprova più tardi.' });
+    return res.status(500).json({ error:'planner_failed', message:'Pianificazione AI non disponibile.' });
   }
-  // Sanitize graph: ensure inputs exist for non-retrieve tasks to avoid runtime TypeError
+  try {
+    graph.intents = Array.isArray(graph.intents)? Array.from(new Set([...graph.intents, intent.action.toLowerCase()])) : [intent.action.toLowerCase()];
+    const reasonTask = graph.tasks.find(t=>t.type==='reason');
+    if(reasonTask){
+      if(intent.action==='STATUS') reasonTask.goal='status';
+      else if(intent.action==='REPORT') reasonTask.goal='report';
+      else if(intent.action==='COMPARE') reasonTask.goal='comparison';
+      else if(intent.action==='RISKS') reasonTask.goal='risks';
+      else if(intent.action==='LIST') reasonTask.goal='listing';
+      else reasonTask.goal = reasonTask.goal||'summary';
+    }
+  } catch(adjErr){ logger.warning('Goal adjust failed', { error: adjErr.message }); }
   try {
     if(graph && Array.isArray(graph.tasks)){
-      const seen = [];
-      let fixed = 0;
-      graph.tasks.forEach((t, idx)=>{
-        if(!t.id) { t.id = 't'+(idx+1); fixed++; }
-        if(t.type !== 'retrieve'){
-          if(!Array.isArray(t.inputs) || !t.inputs.length){
-            // fallback: attach to last seen task id
+      const seen=[]; let fixed=0;
+      graph.tasks.forEach((t,i)=>{
+        if(!t.id){ t.id='t'+(i+1); fixed++; }
+        if(t.type!=='retrieve'){
+          if(!Array.isArray(t.inputs)||!t.inputs.length){
             const fallback = seen.slice().reverse().find(id=>id);
-            if(fallback){ t.inputs = [fallback]; fixed++; }
+            if(fallback){ t.inputs=[fallback]; fixed++; }
           }
         }
         seen.push(t.id);
       });
-      if(fixed){ logger.info('Planner graph sanitized', { fixed }); }
+      if(fixed) logger.info('Planner graph sanitized', { fixed });
     }
   } catch(saniErr){ logger.error('Graph sanitize failed', saniErr.message); }
-  // Pre-generate run id so executor can attach artifacts
   const runId = require('crypto').randomUUID();
   graph.run_id = runId;
-  let result;
-  try { result = await executeGraph(graph); } catch(execErr){
+  let execResult;
+  try { execResult = await executeGraph(graph); } catch(execErr){
     logger.error('RAG execution failed', execErr.message||execErr);
-    if(/reasoning_failed/.test(execErr.message||'')){
-      return res.status(500).json({ error:'reason_failed', message:'Ragionamento AI non riuscito. Riprova tra poco.' });
-    }
-    if(/Entity annotation incomplete|Claim annotation incomplete/.test(execErr.message||'')){
-      return res.status(500).json({ error:'annotator_failed', message:'Annotazione AI incompleta. Riprovare.' });
-    }
-    return res.status(500).json({ error:'rag_failed', message:'Esecuzione pipeline non riuscita.' });
+    if(/reasoning_failed/.test(execErr.message||'')) return res.status(500).json({ error:'reason_failed', message:'Ragionamento AI non riuscito.' });
+    if(/Entity annotation incomplete|Claim annotation incomplete/.test(execErr.message||'')) return res.status(500).json({ error:'annotator_failed', message:'Annotazione incompleta.' });
+    return res.status(500).json({ error:'rag_failed', message:'Pipeline non riuscita.' });
   }
-    const latency = Date.now() - startTs;
-    // Persist run log
+  const latency = Date.now() - startTs;
+  try {
+    const conclusionsJson = JSON.stringify(execResult.conclusions || execResult.result?.conclusions || []);
+    const supportCount = (execResult.support||[]).length;
+    db.run(`INSERT INTO rag_runs (id,user_email,query,intents,graph_json,conclusions_json,support_count,valid,latency_ms) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [runId, req.session.user.email, message, (graph.intents||[]).join(','), JSON.stringify(graph), conclusionsJson, supportCount, execResult.validator?.valid?1:(execResult.valid?1:0), latency],
+      (err)=>{ if(err) logger.error('rag_runs insert failed', err.message); }
+    );
     try {
-      const conclusionsJson = JSON.stringify(result.conclusions || result.result?.conclusions || []);
-      const supportCount = (result.support || []).length;
-      db.run(`INSERT INTO rag_runs (id,user_email,query,intents,graph_json,conclusions_json,support_count,valid,latency_ms) VALUES (?,?,?,?,?,?,?,?,?)`,
-        [runId, req.session.user.email, message, (graph.intents||[]).join(','), JSON.stringify(graph), conclusionsJson, supportCount, result.validator?.valid?1: (result.valid?1:0), latency],
-        (err)=>{ if(err) logger.error('rag_runs insert failed', err.message); }
-      );
-      // Store artifacts (planner graph and final compose) minimal for now
-      try {
-        db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [runId, 'planner', JSON.stringify(graph)]);
-        db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [runId, 'compose', JSON.stringify(result)]);
-      } catch(e){ logger.error('artifact insert failed', e.message); }
-      // Optionally enrich with full chunk texts for UI highlighting
-      if(include_chunk_texts){
-        try {
-          const chunkIds = new Set();
-          (result.support||[]).forEach(s=> s.id && chunkIds.add(s.id));
-          (result.conclusion_grounding||[]).forEach(cg=> (cg.spans||[]).forEach(sp=> sp.chunk_id && chunkIds.add(sp.chunk_id)));
-          const ids = Array.from(chunkIds).slice(0,300);
-          if(ids.length){
-            const placeholders = ids.map(()=>'?').join(',');
-            await new Promise((resolve)=>{
-              db.all(`SELECT id,text,path,loc,src_start,src_end,source,type FROM rag_chunks WHERE id IN (${placeholders})`, ids, (e, rows)=>{
-                if(!e && rows){ result.chunk_texts = rows; }
-                resolve();
-              });
-            });
-          } else {
-            result.chunk_texts = [];
-          }
-        } catch(enrichErr){ logger.error('chunk_text enrichment failed', enrichErr.message); }
-      }
-      return res.json({ run_id: runId, query: message, graph, result, latency_ms: latency });
-    } catch(e){
-      logger.error('RAG logging failed', e.message||e);
-      return res.json({ query: message, graph, result, latency_ms: latency });
-    }
-  } catch(e){
-    logger.error('RAG endpoint error', e.message || e);
-    res.status(500).json({ error: 'rag_failed' });
+      db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [runId,'planner',JSON.stringify(graph)]);
+      db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [runId,'compose',JSON.stringify(execResult)]);
+    } catch(e){ logger.error('artifact insert failed', e.message); }
+  } catch(logErr){ logger.error('RAG logging failed', logErr.message||logErr); }
+  if(include_chunk_texts){
+    try {
+      const chunkIds = new Set();
+      (execResult.support||[]).forEach(s=> s.id && chunkIds.add(s.id));
+      (execResult.conclusion_grounding||[]).forEach(cg=> (cg.spans||[]).forEach(sp=> sp.chunk_id && chunkIds.add(sp.chunk_id)));
+      const ids = Array.from(chunkIds).slice(0,300);
+      if(ids.length){
+        const placeholders = ids.map(()=>'?').join(',');
+        await new Promise(resolve=>{ db.all(`SELECT id,text,path,loc,src_start,src_end,source,type FROM rag_chunks WHERE id IN (${placeholders})`, ids, (e,rows)=>{ if(!e&&rows) execResult.chunk_texts=rows; resolve(); }); });
+      } else execResult.chunk_texts=[];
+    } catch(enrichErr){ logger.error('chunk_text enrichment failed', enrichErr.message); }
   }
+  let answer = await synthesizeConversationalAnswer(message, intent, execResult, sanitizeModelId(req.session.user.selectedModel), process.env.CLAUDE_API_KEY);
+  return res.json({ run_id: runId, query: message, intent, answer, latency_ms: latency, graph, structured: execResult });
 });
 
 // Auto mode classifier (hybrid heuristic + optional LLM gating)
 app.post('/api/mode/classify', async (req,res)=>{
   if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-  try {
-    const { query } = req.body;
-    if(!query || typeof query!=='string') return res.status(400).json({ error:'query required' });
-    // Heuristic scoring
-    const kw = /(prodot|document|fonte|cita|norm|limitat|conflitt|evidenz|policy|scheda|etichett|uso|permess|vietat)/i;
-    let score = 0;
-    if(kw.test(query)) score += 1;
-    if(/(mostra|cita|dimostra|fornisci|eviden)/i.test(query)) score += 0.6;
-    if(query.length > 140) score += 0.4;
-    // If appears to request transformation only
-    if(/(riassum|riformul|parafras|tradu|riscrivi)/i.test(query)) score -= 1.2;
-    let decided = score >= 1 ? 'rag':'chat';
-    let usedLLM = 0; let llm_reason = '';
-    // Ambiguous band triggers LLM gating
-    if(score >= 0.6 && score < 1){
-      try {
-        const gatingPrompt = `Classifica la domanda seguente in JSON puro. Regole: mode='rag' se servono FONTI interne, documenti aziendali, norme, politiche, evidenze o riferimenti puntuali; altrimenti 'chat'. JSON: {"mode":"rag"} o {"mode":"chat"}. Domanda: ${query}`;
-        const { claudeRequest, CLAUDE_MODEL_REASONER } = require('./src/rag/ai/claudeClient');
-        const raw = await claudeRequest(CLAUDE_MODEL_REASONER, gatingPrompt, 100, 0);
-        const s = raw.indexOf('{'); const e = raw.lastIndexOf('}');
-        if(s>=0 && e>s){
-          const parsed = JSON.parse(raw.slice(s,e+1));
-          if(parsed.mode==='rag' || parsed.mode==='chat'){
-            decided = parsed.mode; usedLLM = 1; llm_reason = raw.slice(0,200);
-          }
-        }
-      } catch(gErr){ /* fallback to heuristic */ }
-    }
-    db.run(`INSERT INTO rag_mode_decisions (query,decided_mode,heuristic_score,used_llm,llm_reason) VALUES (?,?,?,?,?)`,
-      [query, decided, score, usedLLM, llm_reason], ()=>{});
-    return res.json({ mode: decided, heuristic_score: score, used_llm: !!usedLLM });
-  } catch(e){
-    return res.status(500).json({ error:'mode_classify_failed' });
-  }
+  const { query } = req.body||{};
+  if(!query || typeof query!=='string') return res.status(400).json({ error:'query required' });
+  const { parseIntent } = require('./src/rag/util/intentParser');
+  const intent = parseIntent(query);
+  db.run(`INSERT INTO rag_mode_decisions (query,decided_mode,heuristic_score,used_llm,llm_reason) VALUES (?,?,?,?,?)`,
+    [query, 'rag', 1.0, 0, intent.action], ()=>{});
+  return res.json({ mode:'rag', action:intent.action, time_range:intent.time_range, entities:intent.entities });
 });
 
 // Batch fetch chunk texts (for UI highlighting) ?ids=chunk1,chunk2
