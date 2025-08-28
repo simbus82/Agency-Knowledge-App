@@ -19,7 +19,7 @@ CLICKUP_CLIENT_SECRET=
 # ClickUp Personal Token (server tool_call)
 CLICKUP_API_KEY=
 
-# Gmail Read-Only (Service Account Delegation)
+# Gmail & Drive (Service Account with Domain-wide Delegation)
 GOOGLE_CREDENTIALS_JSON='{"type":"service_account",...}'
 GOOGLE_IMPERSONATED_USER_EMAIL=
 
@@ -45,5 +45,6 @@ ALERT_THRESHOLD_REFRESH_ERRORS=5
 - `.env` non committare
 - `TOKEN_ENC_KEY` cifra refresh token Google
 - Gating dinamico: se variabili Gmail mancanti, nessun tool relativo appare nel planner
+- Per Drive con Service Account: aggiungi il service account come membro delle Shared Drives necessarie oppure abilita la delega a livello di dominio e imposta `GOOGLE_IMPERSONATED_USER_EMAIL` a un utente Workspace con accesso ai file/cartelle da interrogare.
 - Backup sicuro di `.env.example`
 

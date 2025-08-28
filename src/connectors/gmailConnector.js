@@ -6,6 +6,7 @@
 //       https://www.googleapis.com/auth/gmail.readonly
 
 const { google } = require('googleapis');
+const crypto = require('crypto');
 
 let gmailClient;
 
@@ -96,4 +97,28 @@ async function getEmailContent(messageId){
   }
 }
 
-module.exports = { searchEmails, getEmailContent };
+function bodyToChunks(body, meta={}){
+  if(!body) return [];
+  const parts = body.split(/\n{2,}/).map(s=>s.trim()).filter(Boolean);
+  return parts.map((p, idx)=>({
+    id: crypto.createHash('sha1').update(`gmail:${meta.id||''}:${idx}:${p.slice(0,16)}`).digest('hex'),
+    text: p.slice(0, 2000),
+    source: 'gmail',
+    type: 'email_par',
+    path: meta.subject ? `mail:${meta.subject}` : `mail:${meta.id}`,
+    loc: `par ${idx+1}`
+  }));
+}
+
+/**
+ * Restituisce i chunk annotabili di una email
+ * @param {{ messageId: string }} params
+ */
+async function getEmailChunks({ messageId }){
+  const data = await getEmailContent(messageId);
+  if(!data) return [];
+  const subject = (data.headers||[]).find(h=>h.name?.toLowerCase()==='subject')?.value;
+  return bodyToChunks(data.body, { id: data.id, subject });
+}
+
+module.exports = { searchEmails, getEmailContent, getEmailChunks };

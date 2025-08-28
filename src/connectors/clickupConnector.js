@@ -1,5 +1,6 @@
 // ClickUp Connector - implementazione reale
 const axios = require('axios');
+const crypto = require('crypto');
 
 const CLICKUP_API_TOKEN = process.env.CLICKUP_API_KEY;
 const API_BASE_URL = 'https://api.clickup.com/api/v2';
@@ -58,7 +59,51 @@ async function getTask({ taskId }) {
     }
 }
 
+/**
+ * Ricerca task a livello di team (fallback: filtra client-side per query semplice)
+ * @param {{ teamId?: string, query?: string, assignee?: string, statuses?: string[] }} params
+ * @returns {Promise<Array>} - Array di chunks annotabili
+ */
+async function searchTasks({ teamId, query = '', assignee, statuses = [] } = {}){
+    if (!CLICKUP_API_TOKEN) {
+        console.error("Variabile d'ambiente CLICKUP_API_KEY non impostata.");
+        return [];
+    }
+    try {
+        let tasks = [];
+        if (teamId) {
+            const params = { page: 0, include_closed: true };
+            if (assignee) params['assignees[]'] = [assignee];
+            if (Array.isArray(statuses) && statuses.length) params['statuses[]'] = statuses;
+            const resp = await clickupClient.get(`/team/${teamId}/task`, { params });
+            tasks = (resp.data && resp.data.tasks) ? resp.data.tasks : [];
+        }
+        // Filtro testuale lato client se query presente
+        const q = (query || '').toLowerCase();
+        if (q) {
+            tasks = tasks.filter(t => {
+                const name = (t.name||'').toLowerCase();
+                const desc = (t.description||'').toLowerCase();
+                return name.includes(q) || desc.includes(q);
+            });
+        }
+        // Mappa in chunks annotabili
+        return tasks.slice(0, 100).map((t, i) => ({
+            id: crypto.createHash('sha1').update(`clickup:${t.id}:${i}`).digest('hex'),
+            text: `${t.name || ''}\n${(t.description||'').slice(0, 1800)}`.trim(),
+            source: 'clickup',
+            type: 'task',
+            path: `clickup://task/${t.id}`,
+            loc: t.status?.status || 'unknown'
+        }));
+    } catch (error) {
+        console.error('Errore durante la ricerca task ClickUp:', error.response ? error.response.data : error.message);
+        return [];
+    }
+}
+
 module.exports = {
     getTasks,
     getTask,
+    searchTasks,
 };

@@ -34,6 +34,36 @@ async function ensureReady(){
   }
 }
 
+function toChunksFromAny(input){
+  const crypto = require('crypto');
+  const makeId = (seed) => crypto.createHash('sha1').update(seed).digest('hex');
+  const coerce = (val) => {
+    if (!val) return [];
+    if (Array.isArray(val)) {
+      // If array already contains chunk-like items, keep; if they are objects without text, skip
+      return val.flatMap(v => {
+        if (typeof v === 'string') {
+          return [{ id: makeId('str:'+v.slice(0,32)), text: v.slice(0,2000), source:'unknown', type:'text', path:'', loc:'' }];
+        }
+        if (v && typeof v === 'object') {
+          if (v.text) return [v];
+          if (v.body) return [{ id: makeId('body:'+ (v.id||'') + v.body.slice(0,32)), text: v.body.slice(0,2000), source:(v.source||'unknown'), type:(v.type||'text'), path:(v.path||''), loc:(v.loc||'') }];
+          return [];
+        }
+        return [];
+      });
+    }
+    if (typeof val === 'string') {
+      return [{ id: makeId('str:'+val.slice(0,32)), text: val.slice(0,2000), source:'unknown', type:'text', path:'', loc:'' }];
+    }
+    if (val && typeof val === 'object' && val.text) {
+      return [val];
+    }
+    return [];
+  };
+  return coerce(input);
+}
+
 async function executeGraph(graph){
   await ensureReady();
   const store = {};
@@ -82,7 +112,7 @@ async function executeGraph(graph){
       }
     } else if(task.type==='annotate'){
   if(!Array.isArray(task.inputs) || !task.inputs.length) throw new Error(`task_inputs_missing:${task.id}`);
-  let current = task.inputs.flatMap(id => store[id]||[]);
+  let current = task.inputs.flatMap(id => toChunksFromAny(store[id]));
       if(task.annotators.includes('basic')) current = annotateBasic(current);
   if(task.annotators.includes('entities')) current = await annotateEntities(current);
       if(task.annotators.includes('dates')) current = annotateDates(current);

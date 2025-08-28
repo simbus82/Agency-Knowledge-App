@@ -13,7 +13,7 @@ Agency Knowledge Hub unifica accesso a ClickUp, Google Drive e (opzionalmente) G
 - Claude Sonnet/Opus con selezione per utente
 - Planner LLM → Task Graph (retrieve / tool_call / annotate / correlate / reason / compose)
 - Executor con template parametrici `{tX.path}` e resilienza errori tool
-- Connettori: ClickUp (task + enrichment), Google Drive (full‑text export), Gmail (read‑only opzionale)
+- Connettori: ClickUp (task + enrichment), Google Drive (full‑text export, My Drive + Shared Drives), Gmail (read‑only opzionale)
 - Annotators LLM: entità, date, claims (basic heuristic rimosso)
 - Query expansion & intent parsing model‑driven
 - Memory: riassunto + ultimi N messaggi

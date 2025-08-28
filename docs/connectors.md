@@ -12,9 +12,9 @@ I connettori forniscono accesso read / selective fetch alle fonti esterne. Ogni 
 ## Connectors Attuali
 | Nome | File | Principali Funzioni | Env Necessarie |
 |------|------|---------------------|----------------|
-| Google Drive | `googleDriveConnector.js` | `searchFiles(query)` `getFileContent(id,mime)` | `GOOGLE_CLIENT_ID/SECRET` (OAuth runtime) oppure `GOOGLE_CREDENTIALS_JSON` (service) |
+| Google Drive | `googleDriveConnector.js` | `searchFiles(query)` `searchInFolders({ folderIds, query?, driveId? })` `getFileChunks({ fileId, mimeType?, fileName? })` | `GOOGLE_CLIENT_ID/SECRET` (OAuth runtime) oppure `GOOGLE_CREDENTIALS_JSON` (service) + `GOOGLE_IMPERSONATED_USER_EMAIL` (consigliato) |
 | ClickUp | `clickupConnector.js` | `getTasks({listId})` `getTask({taskId})` | `CLICKUP_API_KEY` (o OAuth UI per user driven) |
-| Gmail (optional) | `gmailConnector.js` | `searchEmails(query,maxResults)` `getEmailContent(id)` | `GOOGLE_CREDENTIALS_JSON`, `GOOGLE_IMPERSONATED_USER_EMAIL` |
+| Gmail (optional) | `gmailConnector.js` | `searchEmails(query,maxResults)` `getEmailContent(id)` `getEmailChunks({ messageId })` | `GOOGLE_CREDENTIALS_JSON`, `GOOGLE_IMPERSONATED_USER_EMAIL` |
 
 ## Tool Registration
 Lo *tool registry* vive in `src/rag/executor/executeGraph.js`. Durante l'avvio o la prima esecuzione del grafo costruisce un dizionario:
@@ -25,7 +25,7 @@ Lo *tool registry* vive in `src/rag/executor/executeGraph.js`. Durante l'avvio o
   gmail_searchEmails: async(params)=>... (solo se env ok)
 }
 ```
-Il planner riceve un catalogo filtrato e può includere `tool_call` solo per i tool disponibili.
+Il planner riceve un catalogo filtrato e può includere `tool_call` solo per i tool disponibili. I connettori Drive/Gmail/ClickUp possono restituire anche "chunks" testuali (campi: `id`, `text`, `source`, `type`, `path`, `loc`) per alimentare annotatori ed executor.
 
 ## Parametric Templates
 I nodi `tool_call` possono referenziare output precedenti con placeholder `{t<index>.<path>}` risolti dall'executor (es: `{t1.files[0].id}`).
