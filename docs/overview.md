@@ -1,25 +1,30 @@
 # Overview
 
-Agency Knowledge Hub unifica accesso a ClickUp e Google Drive con intelligenza Claude AI permettendo query naturali su task, documenti e insight trasversali.
+Agency Knowledge Hub unifica accesso a ClickUp, Google Drive e (opzionalmente) Gmail attraverso un motore AI‑first RAG che pianifica dinamicamente tool call, retrieval e annotazioni per rispondere a query naturali su task, documenti, email e insight trasversali.
 
 ## Key Value
-- Unificazione dati operativi + documentali
-- Risposte contestualizzate con memoria multi‑turn
-- Estendibile: nuove integrazioni e modelli AI
-- Sicuro: token criptati, domini autorizzati, caching controllato
+- Unificazione dati operativi + documentali + email (se abilitato)
+- Risposte contestualizzate con memoria multi‑turn e annotazioni strutturate
+- Estensibilità modulare: nuovi connettori drop‑in (pattern `src/connectors/*`)
+- AI riduce heuristics: parsing intenti, espansione query, date & entity extraction guidate da LLM
+- Sicuro: token criptati, domini autorizzati, gating dinamico dei tool in base alle variabili ambiente
 
 ## Feature Snapshot
 - Claude Sonnet/Opus con selezione per utente
+- Planner LLM → Task Graph (retrieve / tool_call / annotate / correlate / reason / compose)
+- Executor con template parametrici `{tX.path}` e resilienza errori tool
+- Connettori: ClickUp (task + enrichment), Google Drive (full‑text export), Gmail (read‑only opzionale)
+- Annotators LLM: entità, date, claims (basic heuristic rimosso)
+- Query expansion & intent parsing model‑driven
 - Memory: riassunto + ultimi N messaggi
-- ClickUp: gerarchie, commenti, time tracking, enrichment selettivo
-- Google Drive: shared drives, metadata, estrazione contenuti (Docs, Sheets, Slides, PDF, Office)
-- Caching TTL + stale-while-revalidate
-- Admin panel: limiti e toggles runtime
-- Script release semantico + versione esposta via /version
+- Caching TTL + stale‑while‑revalidate
+- Admin panel runtime tuning
+- Script release semantico + versione esposta via `/version`
 
 ## Personas
-- Operativo: recupera rapidamente task e file
-- Project Manager: overview workload & stati
+- Operativo: recupera rapidamente task, file, email rilevanti
+- Project Manager: overview workload & stati aggregati multi‑sorgente
 - Direzione: insight sintetizzati cross‑piattaforma
-- Dev/Admin: manutenzione, scaling, integrazioni future
+- Compliance / Analyst (futuro): correlazioni e timeline
+- Dev/Admin: manutenzione, scaling, aggiunta nuovi connettori
 

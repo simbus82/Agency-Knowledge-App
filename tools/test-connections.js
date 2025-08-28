@@ -57,6 +57,23 @@ async function testClaudeAPI() {
 	}
 }
 
+async function testGmailConnector(){
+	log('\n📨 Testing Gmail Connector (optional)...', 'blue');
+	if(!process.env.GOOGLE_CREDENTIALS_JSON || !process.env.GOOGLE_IMPERSONATED_USER_EMAIL){
+		log('   ⚠️  Gmail non configurato (variabili mancanti) - skipped', 'yellow');
+		return null; // neutro
+	}
+	try {
+		const { searchEmails } = require('../src/connectors/gmailConnector');
+		const sample = await searchEmails('in:inbox newer_than:1d');
+		log(`   ✅ Gmail connector operativo (emails trovate: ${sample.length})`, 'green');
+		return true;
+	} catch(e){
+		log('   ❌ Gmail connector errore: ' + e.message, 'red');
+		return false;
+	}
+}
+
 async function testGoogleOAuth() {
 	log('\n🔐 Testing Google OAuth Configuration...', 'blue');
   
@@ -202,7 +219,8 @@ async function runAllTests() {
 		google: await testGoogleOAuth(),
 		clickup: await testClickUpOAuth(),
 		database: await testDatabase(),
-		server: await testServerHealth()
+		server: await testServerHealth(),
+		gmail: await testGmailConnector()
 	};
 
 	// Summary

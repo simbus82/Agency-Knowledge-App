@@ -1,53 +1,52 @@
-# Generalized RAG & Reasoning Pipeline (MVP)
+# RAG & Reasoning Pipeline (Current State)
 
-Questo documento descrive l'implementazione iniziale (MVP) della pipeline RAG generalizzata introdotta nel progetto. È progettata per evolvere senza dover hardcodare regole o sinonimi, sostituendo progressivamente gli heuristic placeholder con modelli.
+Questo documento descrive lo stato attuale della pipeline RAG AI‑first dopo la sostituzione della maggior parte delle euristiche con componenti LLM.
 
 ## Obiettivi
-1. Un unico endpoint `/api/rag/chat` che pianifica, recupera, annota, ragiona e compone una risposta finale completa (no step-by-step visibile all'utente).
-2. Architettura modulare: planner → executor con task graph → retriever ibrido → annotators → reasoning → validation → composer.
-3. Facilmente estendibile a nuovi tipi di richieste (report, correlazioni, compliance, timeline, confronti, ecc.).
-4. Niente sinonimi hardcoded nel flusso principale (solo placeholder temporanei da rimuovere nel passaggio ai modelli).
+1. Endpoint unificato `/api/rag/chat` che orchestri pianificazione → recupero → annotazione → correlazione → reasoning → composizione.
+2. Task Graph dinamico generato dal planner LLM (nessun grafo statico hardcoded).
+3. Facilmente estendibile con nuovi task type (es. `validate`, `summarize_segment`, `compare_entities`).
+4. Eliminare sinonimi / regex fragili affidandosi a estrazioni strutturate LLM.
 
-## Componenti Aggiunti
-| Componente | File | Descrizione |
-|------------|------|-------------|
-| Planner | `src/rag/planner/planner.js` | Restituisce un Task Graph minimale (da sostituire con planner LLM). |
-| Retriever (BM25 + pseudo embedding) | `src/rag/retrieval/retriever.js` | Indicizza i chunk presenti in `rag_chunks` e fa hybrid scoring. |
-| BM25 index | `src/rag/retrieval/bm25.js` | Implementazione semplice in-memory. |
-| Annotator base | `src/rag/annotators/basic.js` | Etichette naive (prohibition, permission, claim_statement, entity_ref). |
-| Executor | `src/rag/executor/executeGraph.js` | Esegue i task del graph in ordine e produce un risultato finale. |
-| Mock ingestion | `src/rag/util/ingestMock.js` | Script per popolare rapidamente alcuni chunk di test (solo per sviluppo). |
-| Tabella DB | `rag_chunks` (creata in `server.js`) | Archivia i pezzi di conoscenza multi-fonte. |
-| Endpoint | `/api/rag/chat` (in `server.js`) | API sperimentale per interrogare la pipeline. |
+## Componenti Principali
+| Componente | File | Stato |
+|------------|------|-------|
+| Planner LLM | `src/rag/planner/planner.js` | Dinamico: costruisce task graph, gating tool via env |
+| Executor | `src/rag/executor/executeGraph.js` | Esegue tasks, template parametrici, error resilience |
+| Retriever | `src/rag/retrieval/retriever.js` | BM25 + expansion LLM (embeddings reali TBD) |
+| BM25 Index | `src/rag/retrieval/bm25.js` | In-memory semplice |
+| Expansion | `src/rag/retrieval/expansion.js` | LLM-driven (nessun seed statico) |
+| Annotators | `src/rag/annotators/*.js` | entities/date/claims via LLM; basic deprecata |
+| Synthesis | `src/rag/synthesis/synthesizer.js` | Combina evidenze + reasoning |
+| Intent Parser | `src/rag/util/intentParser.js` | LLM JSON extraction |
+| Connectors | `src/connectors/*.js` | ClickUp, Google Drive, Gmail opzionale |
+| Task Graph Execution | parte di executor | Gestione risultati & dipendenze |
 
-## Flusso MVP
-1. Richiesta POST `/api/rag/chat` con `{ message:"..." }`.
-2. Planner produce un graph con nodi: retrieve → annotate → reason → validate → compose.
-3. Retriever: BM25 (60 candidati) + pseudoEmbedding (64 dim hash) → fusione score.
-4. Annotator base aggiunge etichette superficiali.
-5. Reason: heuristica (se trova proibizioni genera conclusione di divieto, altrimenti sintesi). 
-6. Validate: placeholder (controllo support presente).
-7. Compose: testo finale + prime fonti.
+## Flusso Attuale (Sintesi)
+1. POST `/api/rag/chat` → query & contesto memoria
+2. Planner LLM → JSON Task Graph (solo task necessari)
+3. Executor: risolve dipendenze & param template, esegue retrieve / tool_call
+4. Annotators applicati ai chunk top-K rilevanti
+5. Correlate (baseline) raggruppa per entità chiave / timeframe
+6. Reason & Compose generano risposta spiegabile
 
-## Limiti Attuali (da rimuovere nelle prossime iterazioni)
-- Embedding fittizio (hash): sostituire con modello reale (OpenAI, local, ecc.).
-- Planner statico: passare a LLM che genera Task Graph JSON condizionato dalla query.
-- Annotator basato su regex: sostituire con classificatore multi-label (LLM zero-shot → fine-tuned piccolo modello / LoRA).
-- Nessuna query expansion vera (aggiungere espansione dinamica semantic + LLM filtering).
-- Nessuna correlazione multi-sorgente avanzata (aggiungere task `correlate`).
-- Nessun grounding rigoroso (serve validator che verifichi substring degli assert rispetto ai chunk).
+## Limiti Attuali
+- Nessun embedding vettoriale reale (solo BM25 + expansion) → qualitativamente buono ma migliorabile
+- Correlazione baseline limitata (aggregazioni semplici)
+- Mancanza di validator grounding formale (claim → evidence substring)
+- Ranking privo di reranker cross-encoder
+- Mancanza feedback loop utente
 
 ## Evoluzione Pianificata
 | Step | Azione | Beneficio |
 |------|--------|----------|
-| 1 | Embedding reale + caching | Miglior ranking semantico |
-| 2 | Planner LLM few-shot | Task Graph adattivo |
-| 3 | Cross-encoder re-ranker | Migliore qualità topK |
-| 4 | Annotators modulari (entity, date, claim, sentiment) | Estratti strutturati |
-| 5 | Reasoner LLM con schema JSON | Conclusioni tracciabili |
-| 6 | Validator grounding + conflitti | Riduzione allucinazioni |
-| 7 | Correlazione (join su entity/date) | Report multi-fonte |
-| 8 | Active learning loop | Miglioramento continuo |
+| 1 | Embedding reale + hybrid scoring | Miglior recall semantico |
+| 2 | Reranker cross-encoder | Precisione top-K |
+| 3 | Correlation avanzata (timeline / diff / KPI) | Insight multi-sorgente ricchi |
+| 4 | Validator grounding + fact conflict detection | Riduzione allucinazioni |
+| 5 | Feedback loop (thumbs / corrections) | Miglior ranking & planning |
+| 6 | Active memory summarization semantica | Contesto lungo termine |
+| 7 | Fine-grained tool cost heuristics | Ottimizzazione costi & latenza |
 
 ## Schema Tabella `rag_chunks`
 ```
@@ -61,29 +60,34 @@ embedding TEXT (JSON) -- placeholder, non usato nel retriever MVP
 updated_at DATETIME
 ```
 
-## Hotspots per Re-Implementazione con Modelli
-| Modulo | Rimpiazza | Nuovo Input | Output Atteso |
-|--------|----------|-------------|---------------|
-| pseudoEmbed | hash embedding | testo chunk/query | vettore float normalizzato |
-| planner | heuristica | query + meta | task graph JSON validato |
-| annotateBasic | regex | chunk text | labels + probabilità |
-| reason() | heuristica | evidenze annotate | JSON: conclusions[], support[] |
-| validate() | placeholder | reasoning output + evidenze | {valid, issues[]} |
+## Componenti già migrati da Heuristic a LLM
+| Modulo | Precedente | Stato Attuale |
+|--------|-----------|---------------|
+| Intent Parser | regex intent detection | LLM JSON extraction |
+| Query Expansion | seed term set | LLM generative + filter |
+| Entity Extraction | pattern matching | LLM annotator |
+| Date Extraction | regex ranges | LLM normalizer |
+| Basic Annotator | heuristic labels | Deprecata (rimosso) |
+| Planner | static skeleton | LLM adaptive graph |
 
 ## Integrazione UI (futura)
-- Mostrare un badge "(Analisi multi-fonte)" quando il campo `graph` contiene >3 task.
-- Espandere sezione "Fonti" con path + loc.
-- Consentire feedback (👍/👎) → log tabella `rag_feedback`.
+- Badge "Analisi multi-fonte" se graph > n tasks
+- Sezione fonti con snippet + evidenza evidenziata
+- Feedback (👍/👎) → tabella `rag_feedback`
+- Visualization grafo per debug (endpoint `/api/rag/plan` suggerito)
 
 ## Note di Sicurezza
 - Non persistere testi sensibili senza cifratura se policy interna lo richiede.
 - Limitare dimensione chunk (p.es. max 1200 caratteri) per evitare estrazioni massive.
 
 ## Prossimi Commit Suggeriti
-1. Aggiungere script ingestion reale (Drive + ClickUp) → suddivisione chunk.
-2. Integrare embedding API reale + migrazione campo `embedding` da TEXT a BLOB.
-3. Endpoint `/api/rag/plan` per ispezionare solo il graph (debug).
-4. Logging dettagliato per ogni task (tabella `rag_task_log`).
+1. Embedding vettoriali reali + caching (campo `embedding` BLOB)
+2. Reranker cross-encoder
+3. Endpoint `/api/rag/plan` per debug planner
+4. Logging task dettagliato (`rag_task_log`)
+5. Grounding validator + conflict detection
+6. Feedback storage (`rag_feedback`)
+7. Correlation avanzata (timeline / diff / KPI)
 
 ---
-MVP pronto per sperimentazione: sostituire progressivamente gli elementi placeholder man mano che si introducono i modelli veri.
+Pipeline attuale operativa; focus successivo: embeddings reali, reranking e grounding per aumentare precisione e trasparenza.

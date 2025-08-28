@@ -1,43 +1,79 @@
-// src/connectors/googleDriveConnector.js
-// Questo modulo gestirà le interazioni con l'API di Google Drive.
+// Google Drive Connector - implementazione reale
+const { google } = require('googleapis');
+const stream = require('stream');
 
-/**
- * Cerca file in Google Drive basandosi su una query.
- * @param {string} query - La stringa di ricerca (es. "offerta progetto X in:folder_id").
- * @returns {Promise<Array>} - Una promessa che risolve in un array di oggetti file.
- */
-async function searchFiles(query) {
-    console.warn("googleDriveConnector.searchFiles non è ancora implementato.");
-    // TODO: Implementare la chiamata all'API di Google Drive.
-    // Richiederà l'autenticazione (es. OAuth 2.0 o Service Account).
-    // Esempio di logica:
-    // 1. Inizializzare il client dell'API di Google.
-    // 2. Eseguire la ricerca usando la query.
-    // 3. Restituire i risultati formattati.
-    if (!process.env.GOOGLE_API_KEY) {
-        console.error("Variabile d'ambiente GOOGLE_API_KEY non impostata. Impossibile connettersi a Google Drive.");
-        return [];
+let driveClient;
+function getDriveClient() {
+    if (driveClient) return driveClient;
+    if (!process.env.GOOGLE_CREDENTIALS_JSON) {
+        console.error("Variabile d'ambiente GOOGLE_CREDENTIALS_JSON non impostata. Impossibile connettersi a Google Drive.");
+        return null;
     }
-    return []; // Ritorna un array vuoto per ora.
+    try {
+        const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+        });
+        driveClient = google.drive({ version: 'v3', auth });
+        return driveClient;
+    } catch (error) {
+        console.error("Errore nel parsing delle credenziali Google JSON:", error);
+        return null;
+    }
 }
 
 /**
- * Ottiene il contenuto di un file specifico da Google Drive.
- * @param {string} fileId - L'ID del file da scaricare.
- * @returns {Promise<string|null>} - Una promessa che risolve con il contenuto del file o null in caso di errore.
+ * Cerca file in Google Drive.
+ * @param {string} query - La query di ricerca (es. "name contains 'offerta'").
+ * @returns {Promise<Array>} - Un array di oggetti file.
  */
-async function getFileContent(fileId) {
-    console.warn(`googleDriveConnector.getFileContent(${fileId}) non è ancora implementato.`);
-    // TODO: Implementare il download del contenuto del file.
-    // Esempio di logica:
-    // 1. Usare il client API per richiedere il contenuto del file.
-    // 2. Gestire diversi tipi di file (es. Google Docs, Fogli, PDF).
-    // 3. Restituire il testo estratto.
-    if (!process.env.GOOGLE_API_KEY) {
-        console.error("Variabile d'ambiente GOOGLE_API_KEY non impostata.");
+async function searchFiles(query) {
+    const client = getDriveClient();
+    if (!client) return [];
+    try {
+        const response = await client.files.list({
+            q: query,
+            fields: 'files(id, name, mimeType, webViewLink)',
+            pageSize: 10,
+        });
+        return response.data.files || [];
+    } catch (error) {
+        console.error("Errore durante la ricerca di file su Google Drive:", error.message);
+        return [];
+    }
+}
+
+/**
+ * Estrae il contenuto testuale da un file in Google Drive.
+ * @param {string} fileId - L'ID del file.
+ * @param {string} mimeType - Il tipo MIME del file (opzionale).
+ * @returns {Promise<string|null>} - Il contenuto del file come testo.
+ */
+async function getFileContent(fileId, mimeType) {
+    const client = getDriveClient();
+    if (!client) return null;
+    try {
+        let response;
+        if (mimeType && mimeType.includes('google-apps')) {
+            response = await client.files.export({
+                fileId,
+                mimeType: 'text/plain',
+            }, { responseType: 'stream' });
+        } else {
+            response = await client.files.get({ fileId, alt: 'media' }, { responseType: 'stream' });
+        }
+        const reader = new stream.PassThrough();
+        response.data.pipe(reader);
+        let content = '';
+        for await (const chunk of reader) {
+            content += chunk.toString();
+        }
+        return content;
+    } catch (error) {
+        console.error(`Errore durante il recupero del contenuto del file ${fileId}:`, error.message);
         return null;
     }
-    return null; // Ritorna null per ora.
 }
 
 module.exports = {

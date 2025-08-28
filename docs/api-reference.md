@@ -6,15 +6,26 @@
 ## Health
 `GET /health` → stato servizi
 
-## Chat
-`POST /api/claude/message`
-Body:
+## Chat (Legacy Simple)
+`POST /api/claude/message` (modalità diretta legacy)
+
+## RAG Orchestrated Chat
+`POST /api/rag/chat`
+Body minimale:
+```
+{ "message": "Trova le task critiche della prossima settimana e le email recenti del cliente X" }
+```
+Risposta (estratto):
 ```
 {
-  "messages": [{"role":"user","content":"Testo"}],
-  "model": "claude-3-5-sonnet-latest"
+  "answer": "...",
+  "graph": {...},
+  "sources": [...],
+  "tasks": [{"id":"t1","type":"retrieve",...}],
+  "errors": []
 }
 ```
+`graph`/`tasks` possono essere omessi nella risposta finale user-facing (debug only).
 
 ## Settings Admin (esempi)
 `GET /api/admin/settings`
@@ -28,5 +39,6 @@ Body:
 
 ## Sicurezza
 - Tutte le route protette da sessione
-- Limiti e controlli lato server
+- Gating connettori su variabili env
+- Token non esposti lato client
 

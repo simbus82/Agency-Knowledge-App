@@ -31,8 +31,9 @@ Notes:
 - Commenti per blocchi logica AI
 
 ## Test
-- `test-connections.js` per sanità integrazioni
-- Aggiungere test mirati su nuove API
+- `test-connections.js` per sanità integrazioni (carica solo tool disponibili)
+- Aggiungere test mirati su nuovi connettori / planner output
+- (Futuro) test snapshot Task Graph per query tipiche
 
 ## Commit
 - Prefissi: feat:, fix:, chore:, docs:, refactor:
@@ -41,6 +42,14 @@ Notes:
 ## Performance Tips
 - Memorizza risultati costosi (cache helper)
 - Evita loop fetch sequenziali (usa Promise.all dove sicuro)
+- Limita dimensione output tool (pre-trimming)
+- Usa gating env per disattivare connettori non necessari in dev
+
+## Connettori
+- Aggiungi file in `src/connectors/`
+- Registra funzioni nel tool registry (`executeGraph.js`)
+- Non forzare caricamento se env mancano (return null / skip)
+- Documenta variabili correlate
 
 ## Futuro Possibile
 - Linter + formatter standard (ESLint + Prettier)

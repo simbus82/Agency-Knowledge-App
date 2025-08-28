@@ -2,17 +2,21 @@
 const { claudeRequest, CLAUDE_MODEL_PLANNER } = require('../ai/claudeClient');
 const planCache = new Map();
 
-// Descrizione degli strumenti disponibili che il planner può decidere di usare.
-const AVAILABLE_TOOLS = `
-- googleDrive:
-    - searchFiles(query: string): Cerca file in Google Drive. Utile per trovare documenti, offerte, report.
-    - getFileContent(fileId: string): Estrae il testo da un file specifico. Da usare dopo searchFiles.
-- clickup:
-    - getTasks(criteria: {listId: string}): Ottiene i task da una specifica lista di ClickUp.
-    - getTask(taskId: string): Ottiene i dettagli di un singolo task.
-- internal_search:
-    - retrieve(criteria: {raw: string}, k: number, dynamic_expansion: boolean): Cerca nella base di conoscenza interna (documenti già ingeriti). È il default se non serve uno strumento esterno.
-`;
+// Costruzione dinamica strumenti disponibili (esclude gmail se non configurato)
+function buildAvailableToolsDescriptor(){
+    const parts = [];
+    parts.push(`- googleDrive:\n    - searchFiles(query: string): Cerca file in Google Drive. Utile per trovare documenti, offerte, report.\n    - getFileContent(fileId: string): Estrae il testo da un file specifico. Da usare dopo searchFiles.`);
+    parts.push(`- clickup:\n    - getTasks(criteria: {listId: string}): Ottiene i task da una specifica lista di ClickUp.\n    - getTask(taskId: string): Ottiene i dettagli di un singolo task.`);
+    const gmailReady = process.env.GOOGLE_CREDENTIALS_JSON && process.env.GOOGLE_IMPERSONATED_USER_EMAIL;
+    if(gmailReady){
+        parts.push(`- gmail:\n    - searchEmails(query: string, maxResults?: number): Cerca email pertinenti (solo lettura).\n    - getEmailContent(messageId: string): Recupera corpo e metadati di una email.`);
+    }
+    parts.push(`- internal_search:\n    - retrieve(criteria: {raw: string}, k: number, dynamic_expansion: boolean): Cerca nella base di conoscenza interna (documenti ingeriti).`);
+    if(!gmailReady){
+        parts.push(`\n(Nota: gmail non configurato -> non usarlo nel piano.)`);
+    }
+    return parts.join('\n');
+}
 
 async function aiPlan(query) {
     const key = query.trim().toLowerCase();
@@ -25,7 +29,7 @@ La query dell'utente è: "${query}"
 
 Puoi usare una base di conoscenza interna o degli strumenti esterni per ottenere informazioni aggiornate.
 Ecco gli strumenti disponibili:
-${AVAILABLE_TOOLS}
+${buildAvailableToolsDescriptor()}
 
 Regole per la pianificazione:
 1.  Tipi di task consentiti: 'retrieve' (per internal_search), 'tool_call', 'annotate', 'correlate', 'reason', 'validate', 'compose'.
@@ -33,7 +37,7 @@ Regole per la pianificazione:
 3.  'retrieve': si usa per la ricerca interna.
 4.  Dipendenze: Ogni task (tranne il primo) DEVE avere un campo "inputs": [...] con gli id dei task precedenti.
 5.  Flusso: Inizia con 'retrieve' o 'tool_call' per raccogliere i dati. Prosegui con 'annotate' per arricchirli, 'reason' o 'correlate' per analizzarli, e termina sempre con 'validate' e 'compose'.
-6.  Se la domanda richiede un confronto tra dati da fonti diverse (es. un file su Drive e i task su ClickUp), crea un piano che chiama entrambi gli strumenti e poi usa un task 'correlate' per confrontare i risultati.
+6.  Se la domanda richiede un confronto tra dati da fonti diverse (es. file su Drive, task ClickUp, email Gmail), crea un piano che chiama gli strumenti necessari e poi usa un task 'correlate' per confrontare/aggregare i risultati.
 
 Esempio di piano complesso:
 Query: "Verifica se i task nell'offerta per il Progetto-X (file 'offerta_progetto_x.pdf') sono stati creati su ClickUp nella lista 123."

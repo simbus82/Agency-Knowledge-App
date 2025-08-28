@@ -1,41 +1,62 @@
-// src/connectors/clickupConnector.js
-// Questo modulo gestirà le interazioni con l'API di ClickUp.
+// ClickUp Connector - implementazione reale
+const axios = require('axios');
+
+const CLICKUP_API_TOKEN = process.env.CLICKUP_API_KEY;
+const API_BASE_URL = 'https://api.clickup.com/api/v2';
+
+const clickupClient = axios.create({
+    baseURL: API_BASE_URL,
+    headers: {
+        'Authorization': CLICKUP_API_TOKEN,
+        'Content-Type': 'application/json',
+    }
+});
 
 /**
- * Ottiene i task da ClickUp per un progetto o una lista specifica.
- * @param {object} criteria - I criteri per la ricerca (es. { listId: '12345' }).
- * @returns {Promise<Array>} - Una promessa che risolve in un array di oggetti task.
+ * Ottiene i task da una specifica lista di ClickUp.
+ * @param {object} criteria - Criteri, es. { listId: '12345' }.
+ * @returns {Promise<Array>} - Un array di task.
  */
-async function getTasks(criteria) {
-    console.warn("clickupConnector.getTasks non è ancora implementato.", criteria);
-    // TODO: Implementare la chiamata all'API di ClickUp.
-    // Richiederà un API Token di ClickUp.
-    // Esempio di logica:
-    // 1. Costruire l'URL dell'endpoint (es. /api/v2/list/{list_id}/task).
-    // 2. Effettuare la chiamata HTTP con il token di autorizzazione.
-    // 3. Restituire i task formattati.
-    if (!process.env.CLICKUP_API_KEY) {
-        console.error("Variabile d'ambiente CLICKUP_API_KEY non impostata. Impossibile connettersi a ClickUp.");
+async function getTasks({ listId }) {
+    if (!CLICKUP_API_TOKEN) {
+        console.error("Variabile d'ambiente CLICKUP_API_KEY non impostata.");
         return [];
     }
-    return []; // Ritorna un array vuoto per ora.
+    if (!listId) {
+        console.error("listId è richiesto per getTasks in ClickUp.");
+        return [];
+    }
+    try {
+        const response = await clickupClient.get(`/list/${listId}/task`);
+        return response.data.tasks || [];
+    } catch (error) {
+        console.error(`Errore durante il recupero dei task dalla lista ${listId}:`, error.response ? error.response.data : error.message);
+        return [];
+    }
 }
 
 /**
- * Ottiene informazioni su un singolo task da ClickUp.
- * @param {string} taskId - L'ID del task.
- * @returns {Promise<object|null>} - Una promessa che risolve con l'oggetto task o null.
+ * Ottiene i dettagli di un singolo task da ClickUp.
+ * @param {object} params - { taskId: string }
+ * @returns {Promise<object|null>} - L'oggetto task.
  */
-async function getTask(taskId) {
-    console.warn(`clickupConnector.getTask(${taskId}) non è ancora implementato.`);
-    // TODO: Implementare la chiamata all'API di ClickUp per un singolo task.
-    if (!process.env.CLICKUP_API_KEY) {
+async function getTask({ taskId }) {
+    if (!CLICKUP_API_TOKEN) {
         console.error("Variabile d'ambiente CLICKUP_API_KEY non impostata.");
         return null;
     }
-    return null; // Ritorna null per ora.
+    if (!taskId) {
+        console.error("taskId è richiesto per getTask in ClickUp.");
+        return null;
+    }
+    try {
+        const response = await clickupClient.get(`/task/${taskId}`);
+        return response.data;
+    } catch (error) {
+        console.error(`Errore durante il recupero del task ${taskId}:`, error.response ? error.response.data : error.message);
+        return null;
+    }
 }
-
 
 module.exports = {
     getTasks,

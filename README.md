@@ -1,6 +1,6 @@
 # Agency Knowledge Hub 🚀
 
-> **AI-powered knowledge assistant that unifies access to ClickUp and Google Drive through Claude AI intelligence**
+> **AI-powered knowledge & ops assistant with AI-first RAG orchestration across ClickUp, Google Drive & optional Gmail (modular connectors)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
@@ -13,24 +13,27 @@
 
 ## 📋 Overview
 
-**Agency Knowledge Hub** is an intelligent assistant that provides unified access to your project management and document repositories. Built for **56K Agency** and released for everyone, it combines the power of **Claude AI** with seamless integrations to **ClickUp** and **Google Drive**, enabling natural language queries across all your business data.
+**Agency Knowledge Hub** is an intelligent assistant that provides unified access to your operational knowledge (tasks, docs, emails). Built for **56K Agency** and released for everyone, it combines the power of **Claude AI** with modular connectors (ClickUp, Google Drive, Gmail) and an AI‑first RAG pipeline that dynamically plans tool calls and retrieval steps based on each query.
 
 > Current Application Version: **0.9.0** *(badge sopra è sempre autorevole)*
 
 ### ✨ Key Features
 
-- 🤖 **Claude AI Integration** – Anthropic latest models (Sonnet / Opus) with dynamic model selection per-user
-- 🧠 **Multi‑Turn Memory** – Conversation context summarization + last turns retained for coherent follow‑ups
-- ✅ **ClickUp Integration** – Hierarchy (spaces / folders / lists), smart on‑demand task enrichment, comments, time metrics
-- 📁 **Google Drive Deep Access** – Shared drives, metadata + full‑text content extraction (Docs, Sheets, Slides, PDF, DOCX, XLSX, PPTX) with size & rate guards
-- 💾 **Conversation History** – Stored in SQLite (easy to swap with a different RDBMS)
-- 🗃️ **Smart Caching Layer** – TTL + stale‑while‑revalidate for ClickUp & Drive heavy calls
-- 🔐 **Secure Auth & Tokens** – Google OAuth (domain restricted) + encrypted refresh token storage & controlled refresh w/ error logging
-- 🛡️ **Admin Settings Panel** – Runtime non‑sensitive tuning (limits, cache TTL, parsing toggles) directly from the UI
-- 📊 **Cross-Platform Insights** – AI synthesizes signals across tasks & documents (no brittle hardcoded rules)
-- 🧩 **Extensible Engine** – AI‑first orchestration delegates analysis & data selection to the model
-- 🛠️ **Easy Setup** – Wizard + unified start scripts (`start:all`, `dev:all`)
-- 🖥️ **Update Scripts** – Windows PowerShell & (optionally) shell helper to pull latest safely
+- 🤖 **Claude AI Integration** – Anthropic latest models (Sonnet / Opus) with dynamic per-user selection
+- 🧠 **AI‑First RAG Orchestration** – LLM planner builds adaptive task graphs (retrieve · tool_call · annotate · correlate · reason · compose)
+- 🔌 **Modular Connectors** – Plug & play under `src/connectors/` (ClickUp, Drive, Gmail optional) with dynamic activation by env
+- ✅ **ClickUp Deep Integration** – Hierarchy, selective task enrichment, metrics
+- 📁 **Google Drive Full‑Text** – Docs / Slides / Sheets / PDF / Office export & size guards
+- 📨 **Gmail (Read‑Only Optional)** – Service Account domain delegation; excluded automatically if not configured
+- 🧩 **LLM Replaces Heuristics** – Intent parsing, query expansion, entity & date extraction are model‑driven (less brittle regex)
+- 🗂️ **Structured Annotations** – Entities / dates / claims annotators feeding synthesis step
+- 💾 **Conversation Memory** – Summarized history + recent turns window
+- 🗃️ **Smart Caching Layer** – TTL + stale‑while‑revalidate for heavy external calls
+- 🔐 **Secure Auth & Tokens** – OAuth + encrypted refresh tokens + domain allowlist
+- 🛡️ **Admin Settings Panel** – Runtime tuning of non‑sensitive limits & toggles
+- 📊 **Cross-Source Reasoning** – Correlates tasks, docs, (emails if enabled) in answers
+- 🛠️ **Easy Setup** – Interactive wizard & unified scripts
+- 🖥️ **Update Scripts** – PowerShell & Bash safe update workflows
 
 ### 🎯 Benefits
 
@@ -107,43 +110,55 @@ npm run frontend   # Frontend (port 8080)
 
 # Or combined
 npm run start:all
-```
 
 ## ⚙️ Configuration
 
-### Required API Keys
+### Required API Keys / Credentials
 
 #### 1. Claude AI (Anthropic)
-1. Visit [console.anthropic.com](https://console.anthropic.com)
-2. Create a new project
-3. Generate API key: `sk-ant-api03-...`
+1. Vai su [console.anthropic.com](https://console.anthropic.com)
+2. Crea progetto / genera API key: `sk-ant-api...`
+3. Imposta `CLAUDE_API_KEY` nel `.env`
 
-#### 2. Google Workspace OAuth
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create new project
-3. Enable APIs: Drive, Docs, OAuth2
-4. Create OAuth 2.0 credentials
-5. Add authorized redirect: `http://localhost:8080/callback/google`
+#### 2. Google Workspace OAuth (Drive / Docs)
+1. Google Cloud Console → crea progetto
+2. Abilita: Drive API, Docs API, OAuth2
+3. Crea credenziali OAuth Client (User type Internal se Workspace)
+4. Redirect: `http://localhost:8080/callback/google`
+5. Imposta `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ALLOWED_DOMAIN`
 
-#### 3. ClickUp OAuth (Optional)
-1. Visit [ClickUp Developer Portal](https://clickup.com/api)
-2. Create OAuth application
-3. Note Client ID and Secret
+#### 2b. (Optional) Gmail Service Account (Read‑Only)
+Usa SOLO se vuoi interrogare email. Se assente, il tool non appare.
+1. Crea *Service Account* e genera chiave JSON → salva JSON (intero) in `GOOGLE_CREDENTIALS_JSON`
+2. Admin Console Workspace → Security → API Controls → Domain-wide Delegation → Add new
+3. Client ID = service account; Scope: `https://www.googleapis.com/auth/gmail.readonly`
+4. Imposta `GOOGLE_IMPERSONATED_USER_EMAIL` (utente dominio da impersonare)
+5. Riavvia app; il planner includerà il tool Gmail
 
-### Environment Variables (Core)
+#### 3. ClickUp (OAuth +/o Personal Token)
+Opzione A (OAuth UI): `CLICKUP_CLIENT_ID`, `CLICKUP_CLIENT_SECRET`
+Opzione B (Server Personal Token): Genera token e imposta `CLICKUP_API_KEY` (usato nei tool automatici)
+
+### Environment Variables (Core & Connectors)
 
 ```env
 # Claude AI
-CLAUDE_API_KEY=sk-ant-api03-...
+CLAUDE_API_KEY=sk-ant-api...
+SELECTED_CLAUDE_MODEL=claude-sonnet-4-20250514
 
-# Google OAuth
+# Google OAuth (Drive / Docs)
 GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=GOCSPX-...
 ALLOWED_DOMAIN=yourdomain.com
 
-# ClickUp OAuth (Optional)
+# (Optional) Gmail Read-Only (Service Account JSON COMPRESSO su una riga)
+GOOGLE_CREDENTIALS_JSON='{"type":"service_account",...}'
+GOOGLE_IMPERSONATED_USER_EMAIL=user@yourdomain.com
+
+# ClickUp OAuth (UI) &/or Personal Token (Server Tools)
 CLICKUP_CLIENT_ID=your-client-id
 CLICKUP_CLIENT_SECRET=your-client-secret
+CLICKUP_API_KEY=pk_xxx
 
 # Server
 PORT=3000
@@ -151,16 +166,15 @@ FRONTEND_URL=http://localhost:8080
 
 # Security / encryption
 SESSION_SECRET=GENERATED_SESSION_SECRET
-TOKEN_ENC_KEY=BASE64_32BYTE_KEY   # e.g. openssl rand -base64 32 (32 raw bytes)
-SELECTED_CLAUDE_MODEL=claude-sonnet-4-20250514
+TOKEN_ENC_KEY=BASE64_32BYTE_KEY
 
-# (Optional) Alerting
+# Alerting
 ALERT_THRESHOLD_REFRESH_ERRORS=5
 
-# Performance & limits (alcuni modificabili via pannello Admin)
-DRIVE_MAX_BYTES=10485760         # Max bytes per file Drive da scaricare
-DRIVE_CACHE_TTL=600              # secondi
-CLICKUP_CACHE_TTL=3600           # secondi
+# Performance & limits
+DRIVE_MAX_BYTES=10485760
+DRIVE_CACHE_TTL=600
+CLICKUP_CACHE_TTL=3600
 MAX_DRIVE_FILES_TO_FETCH=3
 MAX_CLICKUP_TASKS_ENRICH=3
 DRIVE_EXPORT_MAX_CHARS=20000
@@ -172,15 +186,19 @@ ENABLE_PDF_PARSE=true
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │   Frontend  │───▶│   Backend   │───▶│  Claude AI  │
-│  (Vue/HTML) │    │ (Node.js)   │    │ (Anthropic) │
+│  (HTML/JS)  │    │ (Node.js)   │    │ (LLM Ops)   │
 └─────────────┘    └─────────────┘    └─────────────┘
-                           │
-                    ┌──────┴──────┐
-                    │             │
-            ┌───────▼──┐   ┌──────▼──────┐
-            │ ClickUp  │   │ Google      │
-            │   API    │   │ Drive API   │
-            └──────────┘   └─────────────┘
+           │
+         ┌─────┴─────┐
+         │  RAG /    │
+         │ Orchestr. │
+         └─────┬─────┘
+      ┌────────────────┼─────────────────┐
+      │                │                 │ (optional)
+     ┌────▼────┐      ┌─────▼────┐      ┌─────▼────┐
+     │ ClickUp │      │  Drive   │      │  Gmail   │
+     │  API    │      │  API     │      │  API     │
+     └─────────┘      └──────────┘      └──────────┘
 ```
 
 ### Tech Stack
@@ -202,7 +220,19 @@ ENABLE_PDF_PARSE=true
 - Claude Sonnet / Opus
 - ClickUp API v2 (hierarchy + on‑demand enrichment)
 - Google Drive API v3 (allDrives + export/content parsing)
+- (Optional) Gmail API (read‑only via Service Account delegation)
 - OAuth2 flows (Google / ClickUp)
+
+### RAG & Tool Orchestration
+
+1. **Intent Parsing (LLM)** – estrae action, entità, range temporali
+2. **Planning** – costruzione grafo tasks (JSON) includendo `tool_call` condizionali alle variabili env disponibili
+3. **Execution** – risoluzione template parametrici (`{t1.files[0].id}`) + chiamata tool connector
+4. **Annotation** – estrazione entità / date / claims su chunk rilevanti
+5. **Correlation** – unisce risultati multi‑fonte (attuale baseline, estendibile)
+6. **Synthesis** – risposta finale contestuale con reasoning
+
+Error resilience: errori dei singoli tool vengono catturati e non fermano il grafo; il reasoning li può menzionare o ignorare.
 
 ## 📝 Usage Examples
 
@@ -215,22 +245,25 @@ ENABLE_PDF_PARSE=true
 "Task non assegnate con priorità alta"
 ```
 
-### Document Queries
+### Document & Email Queries
 
 ```
 "Trova il contratto del cliente ABC"
 "Documenti modificati oggi"
 "Presentazioni del Q3"
 "Budget analysis più recente"
+"Email con 'contratto' dell'ultima settimana"
+"Ultimi aggiornamenti via mail sul progetto Phoenix"
 ```
 
-### Cross-Platform Analytics
+### Cross-Platform Analytics & Multi-Source
 
 ```
 "Confronta ore trackate vs budget progetto X"
 "ROI dei progetti completati questo mese"
 "Documenti collegati alle task in ritardo"
 "Report settimanale per il cliente Y"
+"Confronta stato task e contenuti recenti delle email del cliente Z"
 ```
 
 ## 🔧 Development
@@ -290,23 +323,29 @@ Buone pratiche:
 
 ```
 Agency-Knowledge-App/
-├── server.js                 # Main backend server & API
-├── setup.js                  # Interactive setup wizard
-├── update-from-github.ps1    # Safe update (Windows)
-├── update-from-github.sh     # Safe update (Bash)
-├── package.json              # Scripts & dependencies
-├── .env.example              # Env template
+├── server.js                      # Main backend server & API
+├── setup.js                       # Interactive setup wizard
+├── package.json                   # Scripts & dependencies
+├── .env.example                   # Env template
 ├── /src
-│   └── /engines/ai-first-engine.js  # Unified AI-first engine
-├── /tools                    # CLI utilities & tests
-│   ├── test-connections.js
-│   ├── test-ai-engine.js
-│   └── debug-startup.js
-├── /public                   # Static frontend (index.html, css/, js/)
-├── /data                     # SQLite DB
-├── /logs                     # Rotating logs
-├── /docs                     # Modular documentation
-└── /scripts                  # Release / helper scripts
+│   ├── /engines/ai-first-engine.js# Unified AI-first engine
+│   ├── /rag/
+│   │   ├── planner/               # LLM planner (task graph)
+│   │   ├── executor/              # Graph execution + tool_call
+│   │   ├── retrieval/             # BM25 + expansion (LLM)
+│   │   ├── annotators/            # entities, dates, claims
+│   │   ├── synthesis/             # Final answer composer
+│   │   └── util/                  # intent parser, embeddings, etc.
+│   └── /connectors/               # Modular external data sources
+│       ├── googleDriveConnector.js
+│       ├── clickupConnector.js
+│       └── gmailConnector.js      # Optional (only if env set)
+├── /tools                         # CLI utilities & tests
+├── /public                        # Static frontend
+├── /data                          # SQLite DB
+├── /logs                          # Rotating logs
+├── /docs                          # Documentation
+└── /scripts                       # Release / helper scripts
 ```
 
 I vecchi file engine legacy e duplicati sono stati rimossi (nessun codice morto).
@@ -315,7 +354,7 @@ I vecchi file engine legacy e duplicati sono stati rimossi (nessun codice morto)
 
 | Comando | Descrizione |
 |---------|-------------|
-| `npm test` | Test rapido connessioni API e configurazione |
+| `npm test` | Test rapido connessioni API e configurazione (include tool opzionali se presenti) |
 | `npm run test:ai` | Valuta capacità di analisi del motore AI senza hardcode |
 | `node tools/debug-startup.js` | Diagnostica avvio: env, dipendenze, backend, frontend, OAuth |
 | `npm run quality` | Lint + test (usato anche in CI) |
@@ -441,6 +480,14 @@ Referrer-Policy: no-referrer
 #### "Database connection failed"
 - **Cause**: Permessi filesystem (SQLite) o path errato
 - **Solution**: Verifica cartella `/data`, permessi scrittura, path working directory
+
+#### "Gmail tool non appare"
+- **Cause**: Variabili mancanti (`GOOGLE_CREDENTIALS_JSON` o `GOOGLE_IMPERSONATED_USER_EMAIL`)
+- **Solution**: Impostale entrambe; riavvia. Verifica delega dominio e scope.
+
+#### "Errore tool_call ma risposta comunque generata"
+- **Cause**: Fallimento connettore (rete / auth) durante il grafo
+- **Solution**: Controlla log; il motore continua con le fonti disponibili.
 
 ### Debug / Logs
 

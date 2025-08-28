@@ -5,7 +5,8 @@
 - NPM 8+
 - Account Google Workspace (dominio consentito)
 - Claude API Key
-- (Opzionale) ClickUp workspace
+- (Opzionale) ClickUp workspace (OAuth o personal token)
+- (Opzionale) Gmail service account (read-only)
 
 ## Procedura Rapida
 ```bash
@@ -32,9 +33,15 @@ npm run start:all
 5. Imposta `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET`
 
 ## Setup ClickUp (Opzionale)
-1. Crea app / token
-2. Autorizza e ottieni Team ID
-3. Connetti via UI → Impostazioni
+1. OAuth App (client id/secret) per interazioni user driven
+2. Oppure genera Personal API Token e impostalo come `CLICKUP_API_KEY`
+3. Connetti via UI oppure lascia solo token server se basta read-only
+
+## Setup Gmail (Opzionale Read-Only)
+1. Service Account + Domain-wide Delegation
+2. Scope: `https://www.googleapis.com/auth/gmail.readonly`
+3. Inserisci JSON in `GOOGLE_CREDENTIALS_JSON` e mail utente in `GOOGLE_IMPERSONATED_USER_EMAIL`
+4. Riavvia: il planner includerà i tool Gmail
 
 ## Verifica
 - `/health` → tutti i servizi `connected`

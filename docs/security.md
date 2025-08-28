@@ -9,6 +9,8 @@
 - Limiti dimensione file / truncation
 - On-demand enrichment
 - Audit errori refresh token
+- Gating dinamico connettori (evita esposizione tool non configurati)
+- Service Account Gmail con scope minimo (readonly)
 
 ## Da Aggiungere
 - Rate limiting middleware
@@ -16,6 +18,8 @@
 - Audit trail modifiche settings
 - Alerting centralizzato
 - Vector semantic store (privacy controls)
+- Rate limit per tool_call / fonte
+- Grounding validator anti-hallucination
 
 ## Token Encryption
 Chiave: `TOKEN_ENC_KEY` base64 32 bytes.

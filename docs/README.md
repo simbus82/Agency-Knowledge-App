@@ -10,6 +10,7 @@ Centralized docs for Agency Knowledge Hub.
 - Architecture: ./architecture.md
 - AI Engine & Memory: ./ai-engine.md
 - Integrations: ./integrations.md
+- Connectors: ./connectors.md
 - Release & Versioning: ./release-workflow.md
 - Security: ./security.md
 - Troubleshooting: ./troubleshooting.md

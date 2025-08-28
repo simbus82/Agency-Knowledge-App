@@ -1,27 +1,33 @@
 # AI Engine & Memory
 
 ## Obiettivo
-Delegare a Claude la selezione dinamica dei dati rilevanti riducendo logica rigida.
+Orchestrare una pipeline RAG adattiva (planner → executor) che decide dinamicamente quali connettori interrogare, come arricchire i dati e quali annotazioni applicare prima della sintesi finale.
 
-## Fasi
-1. Analisi Intento (prompt analysis)
-2. Selezione dati (decide cosa fetchare: ClickUp, Drive, entrambi)
-3. Enrichment on-demand (solo task/documenti necessari)
-4. Sintesi finale con contesto memorizzato
+## Fasi Principali
+1. Intent Parsing (LLM) – estrazione action, entità, finestra temporale
+2. Planning (LLM) – generazione Task Graph JSON (retrieve / tool_call / annotate / reason / compose)
+3. Retrieval – BM25 + query expansion LLM + (futuro) reranking avanzato
+4. Tool Calls – connettori esterni (ClickUp / Drive / Gmail opzionale) con param templating
+5. Annotation – entità, date, claims estratte via LLM su chunk selezionati
+6. Correlation – baseline join / grouping (estendibile)
+7. Reason & Compose – reasoning assistito + risposta finale strutturata
 
-## Prompt Inputs
+## Prompt Inputs Principali
 - userQuery
 - conversationSummary (riassunto storico)
 - recentMessages (ultimi 12)
-- systemDirectives (policy formato)
+- tool catalog dinamico (solo connettori attivi)
+- system directives (policy & style)
 
 ## Memory
-- Quando lunghezza supera soglia → generazione nuovo summary
-- Summary sostituisce messaggi più vecchi
-- Riduce token cost / mantiene coerenza
+- Sliding window ultimi N turni + summary cumulativo
+- Summary rigenerato quando token > soglia
+- Mantiene coerenza riducendo costo
 
 ## Miglioramenti Futuri
 - Vector store semantico per richiamo lungo termine
-- Adaptive window size in base al modello
-- Fine-tuned role profiles (es. PM vs Exec)
+- Cross-encoder / reranker
+- Correlation avanzata multi-sorgente (timeline, diff, KPI)
+- Fine-tuned role profiles (PM vs Exec vs Analyst)
+- Feedback loop (accetta correzioni utente → learning)
 

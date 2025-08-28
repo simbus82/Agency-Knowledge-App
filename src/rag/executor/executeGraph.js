@@ -4,6 +4,20 @@ const { annotateBasic } = require('../annotators/basic');
 const { annotateEntities } = require('../annotators/entities');
 const { annotateDates } = require('../annotators/dates');
 const { annotateClaims } = require('../annotators/claims');
+// Tool registry (connector facade) - estendibile
+let toolRegistry = null;
+function getToolRegistry(){
+  if(toolRegistry) return toolRegistry;
+  toolRegistry = {};
+  // Always attempt core connectors
+  try { toolRegistry.googleDrive = require('../../connectors/googleDriveConnector'); } catch(e){ console.warn('googleDrive connector non disponibile'); }
+  try { toolRegistry.clickup = require('../../connectors/clickupConnector'); } catch(e){ console.warn('clickup connector non disponibile'); }
+  // Gmail only if env configured
+  if(process.env.GOOGLE_CREDENTIALS_JSON && process.env.GOOGLE_IMPERSONATED_USER_EMAIL){
+    try { toolRegistry.gmail = require('../../connectors/gmailConnector'); } catch(e){ console.warn('gmail connector non disponibile'); }
+  }
+  return toolRegistry;
+}
 
 const retriever = new Retriever();
 const { claudeRequest, CLAUDE_MODEL_REASONER } = require('../ai/claudeClient');
@@ -28,6 +42,44 @@ async function executeGraph(graph){
       const retrieved = await retriever.hybridSearch(task.criteria.raw, task.k || 12, task.dynamic_expansion);
       store[task.id] = retrieved;
       try { db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [graph.run_id||null, `retrieve:${task.id}`, JSON.stringify(retrieved.slice(0,20))]); } catch(e){}
+    } else if(task.type==='tool_call'){
+      // Esegue chiamata ad uno strumento esterno dichiarato nel piano
+      if(!task.tool) throw new Error(`tool_missing:${task.id}`);
+      const registry = getToolRegistry();
+      const [toolName, fnName] = task.tool.split('.');
+  if(!registry[toolName]){ store[task.id] = { error:true, message:`tool_not_found:${toolName}` }; continue; }
+  const fn = registry[toolName][fnName];
+  if(typeof fn !== 'function'){ store[task.id] = { error:true, message:`tool_function_not_found:${task.tool}` }; continue; }
+      // Risoluzione parametri con template semplice {tX.path.to.value}
+      let params = task.params || {};
+      params = JSON.parse(JSON.stringify(params)); // clone
+      function resolveTemplate(str){
+        const m = /^\{(t[0-9]+)\.(.+)\}$/.exec(str.trim());
+        if(!m) return str;
+        const refId = m[1];
+        const path = m[2].split('.');
+        const base = store[refId];
+        if(!base) return null;
+        try {
+          let cur = base;
+            for(const seg of path){
+              if(/^[0-9]+$/.test(seg)) cur = cur[Number(seg)]; else cur = cur[seg];
+              if(cur == null) return null;
+            }
+          return cur;
+        } catch(e){ return null; }
+      }
+      for(const [k,v] of Object.entries(params)){
+        if(typeof v === 'string') params[k] = resolveTemplate(v);
+      }
+      try {
+        const result = await fn(params);
+        store[task.id] = result;
+        try { db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [graph.run_id||null, `tool:${task.id}`, JSON.stringify(Array.isArray(result)? result.slice(0,10): result)]); } catch(e){}
+      } catch(e){
+        store[task.id] = { error: true, message: e.message };
+        console.error('Errore tool_call', task.tool, e.message);
+      }
     } else if(task.type==='annotate'){
   if(!Array.isArray(task.inputs) || !task.inputs.length) throw new Error(`task_inputs_missing:${task.id}`);
   let current = task.inputs.flatMap(id => store[id]||[]);
