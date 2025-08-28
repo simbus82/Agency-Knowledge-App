@@ -64,8 +64,10 @@ Fornisci solo il JSON come risposta.`;
     return { ...jsonResult, raw: q };
   } catch(e) {
     console.error("Error parsing intent with AI:", e);
-    // Fallback or rethrow
-    throw new Error('Failed to parse intent using AI.');
+    // Non procedere senza AI: propaga un errore chiaro
+    const err = new Error('ai_unavailable');
+    err.cause = e;
+    throw err;
   }
 }
 

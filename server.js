@@ -1049,7 +1049,13 @@ app.post('/api/rag/chat', async (req, res) => {
   const startTs = Date.now();
   const { parseIntent } = require('./src/rag/util/intentParser');
   const { synthesizeConversationalAnswer } = require('./src/rag/synthesis/synthesizer');
-  const intent = parseIntent(message);
+  let intent;
+  try {
+    intent = await parseIntent(message);
+  } catch (e) {
+    logger.error('Intent parsing failed', e?.message || e);
+    return res.status(503).json({ error: 'ai_unavailable', message: 'Servizio AI non raggiungibile (intent). Verifica connessione o chiave API.' });
+  }
   let graph;
   try { graph = await plan(message); } catch(e){
     logger.error('Planner failed', e.message||e);
@@ -1127,10 +1133,14 @@ app.post('/api/mode/classify', async (req,res)=>{
   const { query } = req.body||{};
   if(!query || typeof query!=='string') return res.status(400).json({ error:'query required' });
   const { parseIntent } = require('./src/rag/util/intentParser');
-  const intent = parseIntent(query);
-  db.run(`INSERT INTO rag_mode_decisions (query,decided_mode,heuristic_score,used_llm,llm_reason) VALUES (?,?,?,?,?)`,
-    [query, 'rag', 1.0, 0, intent.action], ()=>{});
-  return res.json({ mode:'rag', action:intent.action, time_range:intent.time_range, entities:intent.entities });
+  try {
+    const intent = await parseIntent(query);
+    db.run(`INSERT INTO rag_mode_decisions (query,decided_mode,heuristic_score,used_llm,llm_reason) VALUES (?,?,?,?,?)`,
+      [query, 'rag', 1.0, 1, intent.action], ()=>{});
+    return res.json({ mode:'rag', action:intent.action, time_range:intent.time_range, entities:intent.entities });
+  } catch(e){
+    return res.status(503).json({ error:'ai_unavailable', message:'Servizio AI non raggiungibile (classify). Verifica connessione o chiave API.' });
+  }
 });
 
 // Batch fetch chunk texts (for UI highlighting) ?ids=chunk1,chunk2
