@@ -4,10 +4,11 @@ let HttpProxyAgent, HttpsProxyAgent;
 try { ({ HttpProxyAgent } = require('http-proxy-agent')); } catch(_) {}
 try { ({ HttpsProxyAgent } = require('https-proxy-agent')); } catch(_) {}
 
-const CLAUDE_MODEL_PLANNER = process.env.CLAUDE_RAG_PLANNER_MODEL || 'claude-sonnet-4-20250514';
+const FALLBACK_MAIN = process.env.SELECTED_CLAUDE_MODEL || 'claude-sonnet-4-20250514';
+const CLAUDE_MODEL_PLANNER = process.env.CLAUDE_RAG_PLANNER_MODEL || FALLBACK_MAIN;
 const CLAUDE_MODEL_ANNOTATORS = process.env.CLAUDE_RAG_ANNOTATOR_MODEL || CLAUDE_MODEL_PLANNER;
 const CLAUDE_MODEL_REASONER = process.env.CLAUDE_RAG_REASONER_MODEL || CLAUDE_MODEL_PLANNER;
-const CLAUDE_MODEL_UTILITY = process.env.CLAUDE_RAG_UTILITY_MODEL || 'claude-3-haiku-20240307';
+const CLAUDE_MODEL_UTILITY = process.env.CLAUDE_RAG_UTILITY_MODEL || FALLBACK_MAIN;
 
 // Configure axios client with optional proxy support from env (HTTP(S)_PROXY)
 const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || null;

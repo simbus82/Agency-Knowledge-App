@@ -1,5 +1,5 @@
 // synthesizer.js - Conversational answer composer using RAG result (conclusions + support)
-const axios = require('axios');
+const { claudeRequest } = require('../ai/claudeClient');
 
 function buildSupportMap(result){
   const lines = [];
@@ -39,13 +39,8 @@ async function synthesizeConversationalAnswer(query, intent, ragResult, modelId,
 `6. Struttura output in sezioni: Riepilogo breve, Dettagli, Rischi (se presenti), Prossimi passi, Fonti.\n`+
 `7. Evita ridondanze. Tono professionale ma colloquiale.\n\nGenera ora la risposta.`;
   try {
-    const resp = await axios.post('https://api.anthropic.com/v1/messages', {
-      model: modelId,
-      max_tokens: 1200,
-      temperature: 0.4,
-      messages: [ { role: 'user', content: prompt } ]
-    }, { headers:{ 'x-api-key': apiKey, 'anthropic-version':'2023-06-01', 'content-type':'application/json' } });
-    return resp.data.content?.[0]?.text || 'Risposta non generata.';
+    const text = await claudeRequest(modelId, prompt, 1200, 0.4);
+    return text || 'Risposta non generata.';
   } catch(e){
     return 'Errore nella sintesi conversazionale.';
   }

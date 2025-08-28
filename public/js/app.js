@@ -325,7 +325,8 @@ async function sendMessage() {
                 const errJson = await response.json().catch(()=>({}));
                 if(errJson && errJson.error === 'ai_unavailable'){
                     UIManager.removeTypingIndicator();
-                    UIManager.addMessage('ai', 'Al momento il servizio AI non è raggiungibile. Verifica connessione o chiave API e riprova.');
+                    const detail = errJson.detail ? ` Dettagli: ${errJson.detail}` : '';
+                    UIManager.addMessage('ai', 'Al momento il servizio AI non è raggiungibile. Verifica connessione o chiave API e riprova.' + detail);
                     throw new Error('AI unavailable');
                 }
                 throw new Error(errJson.message || `HTTP ${response.status}`);

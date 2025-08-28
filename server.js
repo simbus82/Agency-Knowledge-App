@@ -1069,7 +1069,8 @@ app.post('/api/rag/chat', async (req, res) => {
     intent = await parseIntent(message);
   } catch (e) {
     logger.error('Intent parsing failed', e?.message || e);
-    return res.status(503).json({ error: 'ai_unavailable', message: 'Servizio AI non raggiungibile (intent). Verifica connessione o chiave API.' });
+    const detail = (e && e.cause && (e.cause.response?.data?.error?.message || e.cause.code || e.cause.message)) || '';
+    return res.status(503).json({ error: 'ai_unavailable', message: 'Servizio AI non raggiungibile (intent). Verifica connessione o chiave API.', detail });
   }
   let graph;
   try { graph = await plan(message); } catch(e){
@@ -1154,7 +1155,8 @@ app.post('/api/mode/classify', async (req,res)=>{
       [query, 'rag', 1.0, 1, intent.action], ()=>{});
     return res.json({ mode:'rag', action:intent.action, time_range:intent.time_range, entities:intent.entities });
   } catch(e){
-    return res.status(503).json({ error:'ai_unavailable', message:'Servizio AI non raggiungibile (classify). Verifica connessione o chiave API.' });
+    const detail = (e && e.cause && (e.cause.response?.data?.error?.message || e.cause.code || e.cause.message)) || '';
+    return res.status(503).json({ error:'ai_unavailable', message:'Servizio AI non raggiungibile (classify). Verifica connessione o chiave API.', detail });
   }
 });
 
