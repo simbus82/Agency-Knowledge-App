@@ -6,7 +6,7 @@ const planCache = new Map();
 function buildAvailableToolsDescriptor(){
     const parts = [];
     parts.push(`- googleDrive:\n    - searchFiles(query: string): Cerca file in My Drive e Drive Condivisi.\n    - searchInFolders(params: { folderIds: string[], query?: string, driveId?: string }): Cerca in una o più cartelle (anche Shared Drives).\n    - getFileChunks(params: { fileId: string, mimeType?: string, fileName?: string }): Estrae chunk testuali annotabili da un file.`);
-    parts.push(`- clickup:\n    - getTasks(criteria: {listId: string}): Ottiene i task da una specifica lista.\n    - getTask(params: {taskId: string}): Ottiene i dettagli di un singolo task.\n    - searchTasks(params: {teamId?: string, query?: string, assignee?: string, statuses?: string[]}): Ricerca task a livello team e restituisce chunk annotabili.`);
+    parts.push(`- clickup:\n    - getTasks(criteria: {listId: string}): Ottiene i task da una specifica lista.\n    - getTask(params: {taskId: string}): Ottiene i dettagli di un singolo task.\n    - searchTasks(params: {teamId?: string, query?: string, assignee?: string, statuses?: string[], overdueOnly?: boolean}): Ricerca task a livello team e restituisce chunk annotabili. Se overdueOnly=true, filtra i task con scadenza passata e non chiusi.`);
     const gmailReady = process.env.GOOGLE_CREDENTIALS_JSON && process.env.GOOGLE_IMPERSONATED_USER_EMAIL;
     if(gmailReady){
         parts.push(`- gmail:\n    - searchEmails(query: string, maxResults?: number): Cerca email pertinenti (solo lettura).\n    - getEmailChunks(params: { messageId: string }): Restituisce chunk annotabili del corpo email.`);

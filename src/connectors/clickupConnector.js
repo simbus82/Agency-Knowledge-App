@@ -64,20 +64,27 @@ async function getTask({ taskId }) {
  * @param {{ teamId?: string, query?: string, assignee?: string, statuses?: string[] }} params
  * @returns {Promise<Array>} - Array di chunks annotabili
  */
-async function searchTasks({ teamId, query = '', assignee, statuses = [] } = {}){
+async function searchTasks({ teamId, query = '', assignee, statuses = [], overdueOnly = false } = {}){
     if (!CLICKUP_API_TOKEN) {
         console.error("Variabile d'ambiente CLICKUP_API_KEY non impostata.");
         return [];
     }
     try {
         let tasks = [];
-        if (teamId) {
+        let effTeamId = teamId;
+        if (!effTeamId) {
+            try {
+                const teamsResp = await clickupClient.get(`/team`);
+                effTeamId = teamsResp.data?.teams?.[0]?.id;
+            } catch(e){ /* ignore, will remain undefined */ }
+        }
+        if (effTeamId) {
             const params = { page: 0, include_closed: true };
             if (assignee) params['assignees[]'] = [assignee];
             if (Array.isArray(statuses) && statuses.length) params['statuses[]'] = statuses;
-            const resp = await clickupClient.get(`/team/${teamId}/task`, { params });
+            const resp = await clickupClient.get(`/team/${effTeamId}/task`, { params });
             tasks = (resp.data && resp.data.tasks) ? resp.data.tasks : [];
-        }
+        } // else: cannot list without team; will rely on text-only fallback -> empty list
         // Filtro testuale lato client se query presente
         const q = (query || '').toLowerCase();
         if (q) {
@@ -85,6 +92,15 @@ async function searchTasks({ teamId, query = '', assignee, statuses = [] } = {})
                 const name = (t.name||'').toLowerCase();
                 const desc = (t.description||'').toLowerCase();
                 return name.includes(q) || desc.includes(q);
+            });
+        }
+        // Filtro overdue se richiesto
+        if (overdueOnly) {
+            const now = Date.now();
+            tasks = tasks.filter(t => {
+                const due = t.due_date ? Number(t.due_date) : null;
+                const closed = (t.status?.type || '').toLowerCase() === 'done' || (t.status?.status || '').toLowerCase() === 'closed';
+                return due != null && due < now && !closed;
             });
         }
         // Mappa in chunks annotabili
