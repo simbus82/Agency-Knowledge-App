@@ -50,7 +50,8 @@ module.exports = {
   claudeRequest,
   CLAUDE_MODEL_PLANNER,
   CLAUDE_MODEL_ANNOTATORS,
-  CLAUDE_MODEL_REASONER
+  CLAUDE_MODEL_REASONER,
+  CLAUDE_MODEL_UTILITY
 };
 
 // Lightweight connectivity ping used by health checks
