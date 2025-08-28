@@ -1,4 +1,4 @@
-# Guida Rapida Locale (Developer Friendly)
+# Guida Rapida Locale (Developer Friendly) #
 
 Questa è la versione super sintetica per lavorare sul progetto senza perdersi nei dettagli.
 
