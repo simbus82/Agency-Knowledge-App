@@ -614,13 +614,25 @@ window.checkServiceNow = async (service) => {
         return;
     }
     try {
-        const resp = await fetch(`${CONFIG.API_BASE}/api/status/services`, { credentials:'include' });
-        if(!resp.ok) throw new Error('status_http_'+resp.status);
-        const data = await resp.json();
-        const ok = data.services?.[service === 'database' ? 'database' : service];
+        let ok = false;
+        let errorDetail = '';
+        if(service==='claude'){
+            const ping = await fetch(`${CONFIG.API_BASE}/api/claude/ping`, { credentials:'include' });
+            if(ping.ok){
+                ok = true;
+            } else {
+                const err = await ping.json().catch(()=>({}));
+                errorDetail = err && err.error ? String(err.error) : `HTTP ${ping.status}`;
+            }
+        } else {
+            const resp = await fetch(`${CONFIG.API_BASE}/api/status/services`, { credentials:'include' });
+            if(!resp.ok) throw new Error('status_http_'+resp.status);
+            const data = await resp.json();
+            ok = !!(data.services?.[service === 'database' ? 'database' : service]);
+        }
         StateManager.setConnectionStatus(service, !!ok);
         UIManager.updateConnectionStatus(service, !!ok);
-        UIManager.showToast(`${service} ${ok?'OK':'KO'}`, ok?'success':'warning');
+        UIManager.showToast(`${service} ${ok?'OK':'KO'}${ok?'': (errorDetail? ' - '+errorDetail:'')}`, ok?'success':'warning');
     } catch(e){
         StateManager.setConnectionStatus(service,false);
         UIManager.updateConnectionStatus(service,false);
@@ -642,4 +654,3 @@ window.confirmOauthGoogle = () => {
     UIManager.showToast('Apertura flusso Google OAuth...', 'info');
     window.open('/auth/google', '_blank');
 };
-

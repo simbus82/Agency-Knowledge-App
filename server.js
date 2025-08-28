@@ -28,6 +28,7 @@ const AIFirstEngine = require('./src/engines/ai-first-engine');
 const { plan } = require('./src/rag/planner/planner');
 const { executeGraph } = require('./src/rag/executor/executeGraph');
 const { embedAndStoreLexiconTerms } = require('./src/rag/util/embeddings');
+const { claudePing } = require('./src/rag/ai/claudeClient');
 const { ingestDriveContent } = require('./src/rag/util/ingestProcessor');
 // Legacy engines removed (AIExecutiveEngine, BusinessIntelligence)
 
@@ -57,6 +58,20 @@ app.use(session({
 // Lightweight version endpoint (health tooling / debugging)
 app.get('/version', (req, res) => {
   res.json({ version: APP_VERSION, timestamp: new Date().toISOString() });
+});
+
+// Connectivity: Claude AI ping (deep health)
+app.get('/api/claude/ping', async (req, res) => {
+  if(!process.env.CLAUDE_API_KEY){
+    return res.status(400).json({ ok:false, error:'missing_key' });
+  }
+  try {
+    const out = await claudePing(5000);
+    return res.json({ ok:true, model: out.model });
+  } catch(e){
+    const msg = e?.code || e?.message || 'unknown_error';
+    return res.status(503).json({ ok:false, error: msg });
+  }
 });
 
 // Initialize SQLite database for config and conversations

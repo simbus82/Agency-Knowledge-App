@@ -1,5 +1,17 @@
 // tools/test-connections.js - Consolidated test script (moved from project root)
 const axios = require('axios');
+let HttpProxyAgent, HttpsProxyAgent;
+try { ({ HttpProxyAgent } = require('http-proxy-agent')); } catch(_) {}
+try { ({ HttpsProxyAgent } = require('https-proxy-agent')); } catch(_) {}
+const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || null;
+const agentConfig = (()=>{
+  if(!proxyUrl) return {};
+  try {
+    const httpAgent = HttpProxyAgent ? new HttpProxyAgent(proxyUrl) : undefined;
+    const httpsAgent = HttpsProxyAgent ? new HttpsProxyAgent(proxyUrl) : undefined;
+    return { httpAgent, httpsAgent, proxy: false };
+  } catch(_) { return {}; }
+})();
 const fs = require('fs');
 require('dotenv').config();
 
@@ -26,18 +38,19 @@ async function testClaudeAPI() {
 	}
 
 	try {
-		const response = await axios.post('https://api.anthropic.com/v1/messages', {
-			model: 'claude-sonnet-4-20250514',
-			max_tokens: 10,
-			messages: [{ role: 'user', content: 'Hi' }]
-		}, {
-			headers: {
-				'x-api-key': process.env.CLAUDE_API_KEY,
-				'anthropic-version': '2023-06-01',
-				'content-type': 'application/json'
-			},
-			timeout: 10000
-		});
+    const response = await axios.post('https://api.anthropic.com/v1/messages', {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 10,
+      messages: [{ role: 'user', content: 'Hi' }]
+    }, {
+      headers: {
+        'x-api-key': process.env.CLAUDE_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json'
+      },
+      timeout: 10000,
+      ...agentConfig
+    });
 
 		log('   ✅ Claude AI connection successful', 'green');
 		log(`   📊 Model: ${response.data.model}`, 'yellow');
