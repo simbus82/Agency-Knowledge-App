@@ -71,7 +71,7 @@ async function searchTasks({ teamId, query = '', assignee, statuses = [], overdu
     }
     try {
         let tasks = [];
-        let effTeamId = teamId;
+        let effTeamId = teamId || process.env.CLICKUP_TEAM_ID;
         if (!effTeamId) {
             try {
                 const teamsResp = await clickupClient.get(`/team`);

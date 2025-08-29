@@ -67,7 +67,9 @@
                                 <button class="test-button btn-outline" onclick="testConnection('claude')">Test</button>
                             </div>
                             <small class="help-text">
-                                Ottieni la tua API key da <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>
+                                Genera una API Key dal tuo account Anthropic: 
+                                <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a>. 
+                                Guida API: <a href="https://docs.anthropic.com/" target="_blank" rel="noopener">docs.anthropic.com</a>.
                             </small>
                         </div>
                     </div>
@@ -89,6 +91,12 @@
                                 placeholder="xxxxx.apps.googleusercontent.com"
                                 autocomplete="off"
                             >
+                            <small class="help-text">
+                                Crea un OAuth Client ID (tipo Web) in Google Cloud Console → 
+                                <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">APIs &amp; Services → Credentials</a>. 
+                                Documentazione: 
+                                <a href="https://developers.google.com/identity/protocols/oauth2/web-server" target="_blank" rel="noopener">OAuth 2.0 for Web Server</a>.
+                            </small>
                         </div>
                         <div class="form-group">
                             <label for="googleClientSecret">Client Secret</label>
@@ -103,7 +111,38 @@
                                 <button class="test-button btn-outline" onclick="testConnection('google')">Test</button>
                             </div>
                             <small class="help-text">
-                                Configura OAuth in <a href="https://console.cloud.google.com" target="_blank">Google Cloud Console</a>
+                                Imposta come Redirect URI (dev): <code>http://localhost:3000/callback/google</code>. 
+                                Aggiungi gli scope Drive Readonly (Docs/Drive). 
+                                Trovi i client nella 
+                                <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console</a>.
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ClickUp API Key (server-side tools) -->
+                <div class="config-card">
+                    <div class="config-header">
+                        <h3>ClickUp API Key (Server)</h3>
+                        <span class="status-badge" id="clickupApiKeyStatus">Non configurato</span>
+                    </div>
+                    <div class="config-body">
+                        <div class="form-group">
+                            <label for="clickupApiKey">API Key</label>
+                            <div class="input-with-button">
+                                <input 
+                                    type="password" 
+                                    id="clickupApiKey" 
+                                    class="form-input" 
+                                    placeholder="pk_..."
+                                    autocomplete="off"
+                                >
+                                <button class="test-button btn-outline" onclick="testConnection('clickup_token')">Test</button>
+                            </div>
+                            <small class="help-text">
+                                Token personale per l’accesso server-side ai task (consigliato con Team ID). Non viene mostrato dopo il salvataggio. 
+                                Genera/gestisci da <a href="https://app.clickup.com/settings/apps" target="_blank" rel="noopener">ClickUp → Settings → Apps</a>. 
+                                Info su Personal Token: <a href="https://clickup.com/api/developer-portal/authentication/" target="_blank" rel="noopener">Developer Portal</a>.
                             </small>
                         </div>
                     </div>
@@ -125,6 +164,12 @@
                                 placeholder="Client ID ClickUp"
                                 autocomplete="off"
                             >
+                            <small class="help-text">
+                                Crea una app OAuth in ClickUp (richiede login) → 
+                                <a href="https://app.clickup.com/settings/apps" target="_blank" rel="noopener">Settings → Apps</a>. 
+                                Documentazione OAuth: 
+                                <a href="https://clickup.com/api/developer-portal/authentication/" target="_blank" rel="noopener">Developer Portal</a>.
+                            </small>
                         </div>
                         <div class="form-group">
                             <label for="clickupClientSecret">Client Secret</label>
@@ -139,7 +184,7 @@
                                 <button class="test-button btn-outline" onclick="testConnection('clickup')">Test</button>
                             </div>
                             <small class="help-text">
-                                Crea un'app in <a href="https://app.clickup.com" target="_blank">ClickUp Settings</a>
+                                Conserva al sicuro questo valore; non verrà mostrato in chiaro dopo il salvataggio.
                             </small>
                         </div>
                     </div>
@@ -176,7 +221,7 @@
                                 value="56k.agency"
                             >
                             <small class="help-text">
-                                Solo gli utenti con email @dominio potranno accedere
+                                Solo gli utenti con email @dominio potranno accedere. Esempio: <code>56k.agency</code> limita l’accesso a <code>@56k.agency</code>.
                             </small>
                         </div>
                     </div>
@@ -241,6 +286,12 @@
                             <div class="form-group">
                                 <label for="clickup_cache_ttl">ClickUp cache TTL (sec)</label>
                                 <input id="clickup_cache_ttl" name="CLICKUP_CACHE_TTL" type="number" min="60" class="form-input" />
+                            </div>
+
+                            <div class="form-group">
+                                <label for="clickup_team_id">ClickUp Team ID</label>
+                                <input id="clickup_team_id" name="CLICKUP_TEAM_ID" type="text" class="form-input" placeholder="es. 1234567" />
+                                <small class="help-text">Imposta l'ID del Team ClickUp da usare come default. Visibile in ClickUp → Settings → Teams.</small>
                             </div>
 
                             <div class="form-group">

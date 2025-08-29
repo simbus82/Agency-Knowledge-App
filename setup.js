@@ -97,6 +97,7 @@ async function setup() {
   log('\n3️⃣  CLICKUP OAUTH (Opzionale - premi Enter per saltare)', 'bright');
   config.CLICKUP_CLIENT_ID = await question('   ClickUp Client ID: ') || '';
   config.CLICKUP_CLIENT_SECRET = await question('   ClickUp Client Secret: ') || '';
+  config.CLICKUP_TEAM_ID = await question('   ClickUp Team ID (consigliato per default team): ') || '';
 
   // Server configuration
   log('\n4️⃣  CONFIGURAZIONE SERVER', 'bright');
@@ -110,7 +111,6 @@ async function setup() {
   config.TOKEN_ENC_KEY = crypto.randomBytes(32).toString('base64');
   // Optional performance / limits
   config.DRIVE_MAX_BYTES = '10485760'; // 10 MB default
-  config.CLICKUP_TEAM_ID = '';
   config.DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 
   // Create .env file
@@ -130,6 +130,7 @@ ALLOWED_DOMAIN=${config.ALLOWED_DOMAIN}
 # ClickUp OAuth Configuration (Optional)
 CLICKUP_CLIENT_ID=${config.CLICKUP_CLIENT_ID}
 CLICKUP_CLIENT_SECRET=${config.CLICKUP_CLIENT_SECRET}
+CLICKUP_TEAM_ID=${config.CLICKUP_TEAM_ID}
 
 # Server Configuration
 PORT=${config.PORT}

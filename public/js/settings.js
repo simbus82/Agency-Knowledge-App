@@ -65,11 +65,18 @@ async function loadConfigurationStatus() {
             document.getElementById('googleClientSecret').placeholder = '••••••••••••••••••••';
         }
 
-        // Aggiorna stato ClickUp
+        // Aggiorna stato ClickUp (OAuth)
         updateStatusBadge('clickupStatus', config.clickup, 'ClickUp OAuth', true);
+        // Aggiorna stato ClickUp API Key
+        const apiKeyBadge = document.getElementById('clickupApiKeyStatus');
+        if (apiKeyBadge) updateStatusBadge('clickupApiKeyStatus', !!config.clickupApiKey, 'ClickUp API Key');
         if (config.clickup) {
             document.getElementById('clickupClientId').placeholder = '••••••••••••••••••••';
             document.getElementById('clickupClientSecret').placeholder = '••••••••••••••••••••';
+        }
+        if (config.clickupApiKey) {
+            const el = document.getElementById('clickupApiKey');
+            if (el) el.placeholder = '••••••••••••••••••••';
         }
 
         // Popola dominio
@@ -120,6 +127,14 @@ async function testConnection(service) {
             }
             credentials.apiKey = apiKey;
             break;
+        case 'clickup_token':
+            apiKey = document.getElementById('clickupApiKey').value;
+            if (!apiKey) {
+                showToast('Inserisci la ClickUp API Key per testare', 'warning');
+                return;
+            }
+            credentials.apiKey = apiKey;
+            break;
         // Aggiungere logica per altri servizi se necessario
         default:
             showToast(`Test per ${service} non implementato`, 'warning');
@@ -151,6 +166,7 @@ async function saveConfiguration() {
         google_client_secret: document.getElementById('googleClientSecret').value,
         clickup_client_id: document.getElementById('clickupClientId').value,
         clickup_client_secret: document.getElementById('clickupClientSecret').value,
+        clickup_api_key: document.getElementById('clickupApiKey').value,
         allowed_domain: document.getElementById('allowedDomain').value
     };
 
@@ -248,6 +264,7 @@ function showToast(message, type = 'info') {
         DRIVE_MAX_BYTES: 'drive_max_bytes',
         DRIVE_CACHE_TTL: 'drive_cache_ttl',
         CLICKUP_CACHE_TTL: 'clickup_cache_ttl',
+        CLICKUP_TEAM_ID: 'clickup_team_id',
         MAX_DRIVE_FILES_TO_FETCH: 'max_drive_files',
         MAX_CLICKUP_TASKS_ENRICH: 'max_clickup_tasks_enrich',
         DRIVE_EXPORT_MAX_CHARS: 'drive_export_max_chars',

@@ -588,6 +588,7 @@ app.get('/api/config/overview', (req, res) => {
     claude: !!process.env.CLAUDE_API_KEY,
     google: !!process.env.GOOGLE_CLIENT_ID && !!process.env.GOOGLE_CLIENT_SECRET,
     clickup: !!process.env.CLICKUP_CLIENT_ID && !!process.env.CLICKUP_CLIENT_SECRET,
+    clickupApiKey: !!process.env.CLICKUP_API_KEY,
     allowedDomain: process.env.ALLOWED_DOMAIN || '56k.agency'
   });
 });
@@ -618,6 +619,18 @@ app.post('/api/config/save', async (req, res) => {
     if (config.google_client_secret) newConfig.GOOGLE_CLIENT_SECRET = config.google_client_secret;
     if (config.clickup_client_id) newConfig.CLICKUP_CLIENT_ID = config.clickup_client_id;
     if (config.clickup_client_secret) newConfig.CLICKUP_CLIENT_SECRET = config.clickup_client_secret;
+    if (config.clickup_api_key) {
+        // Validate the token by calling ClickUp /user
+        try {
+            const ok = await testClickUpToken(config.clickup_api_key);
+            if (!ok.success) {
+                return res.status(400).json({ error: 'Invalid ClickUp API key', details: ok.error });
+            }
+            newConfig.CLICKUP_API_KEY = config.clickup_api_key;
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid ClickUp API key', details: e.message });
+        }
+    }
     if (config.allowed_domain) newConfig.ALLOWED_DOMAIN = config.allowed_domain;
     if (!newConfig.SESSION_SECRET) newConfig.SESSION_SECRET = generateSecret();
     if (!newConfig.FRONTEND_URL) newConfig.FRONTEND_URL = 'http://localhost:8080';
@@ -683,7 +696,8 @@ app.get('/api/config/settings', (req, res) => {
     MAX_DRIVE_FILES_TO_FETCH: Number(process.env.MAX_DRIVE_FILES_TO_FETCH || 3),
     MAX_CLICKUP_TASKS_ENRICH: Number(process.env.MAX_CLICKUP_TASKS_ENRICH || 3),
     DRIVE_EXPORT_MAX_CHARS: Number(process.env.DRIVE_EXPORT_MAX_CHARS || 20000),
-    ENABLE_PDF_PARSE: (process.env.ENABLE_PDF_PARSE || 'true') === 'true'
+    ENABLE_PDF_PARSE: (process.env.ENABLE_PDF_PARSE || 'true') === 'true',
+    CLICKUP_TEAM_ID: process.env.CLICKUP_TEAM_ID || ''
   };
 
   const defaults = { ...settings };
@@ -723,7 +737,7 @@ app.put('/api/config/settings', (req, res) => {
     const editableKeys = [
       'FRONTEND_URL','ALLOWED_DOMAIN','DRIVE_MAX_BYTES','DRIVE_CACHE_TTL',
       'CLICKUP_CACHE_TTL','MAX_DRIVE_FILES_TO_FETCH','MAX_CLICKUP_TASKS_ENRICH',
-      'DRIVE_EXPORT_MAX_CHARS','ENABLE_PDF_PARSE'
+      'DRIVE_EXPORT_MAX_CHARS','ENABLE_PDF_PARSE','CLICKUP_TEAM_ID'
     ];
 
     const newConfig = { ...envConfig };
@@ -761,7 +775,8 @@ app.put('/api/config/settings', (req, res) => {
       MAX_DRIVE_FILES_TO_FETCH: Number(process.env.MAX_DRIVE_FILES_TO_FETCH || 3),
       MAX_CLICKUP_TASKS_ENRICH: Number(process.env.MAX_CLICKUP_TASKS_ENRICH || 3),
       DRIVE_EXPORT_MAX_CHARS: Number(process.env.DRIVE_EXPORT_MAX_CHARS || 20000),
-      ENABLE_PDF_PARSE: (process.env.ENABLE_PDF_PARSE || 'true') === 'true'
+      ENABLE_PDF_PARSE: (process.env.ENABLE_PDF_PARSE || 'true') === 'true',
+      CLICKUP_TEAM_ID: process.env.CLICKUP_TEAM_ID || ''
     } });
 
   } catch (err){
@@ -777,7 +792,7 @@ app.post('/api/test/connection', async (req, res) => {
   try {
     let result;
     
-    switch(service) {
+  switch(service) {
       case 'claude':
         result = await testClaudeAPI(credentials.apiKey);
         break;
@@ -786,6 +801,9 @@ app.post('/api/test/connection', async (req, res) => {
         break;
       case 'clickup':
         result = await testClickUpAPI(credentials.clientId, credentials.clientSecret);
+        break;
+      case 'clickup_token':
+        result = await testClickUpToken(credentials.apiKey);
         break;
       case 'google':
         result = { success: true }; // Google test happens during OAuth
@@ -806,8 +824,12 @@ app.get('/api/status/services', async (req,res)=>{
   summary.claude = !!process.env.CLAUDE_API_KEY;
   // DB: simple pragma query
   try { await new Promise((resolve,reject)=> db.get('SELECT 1 as ok', (e,row)=> e?reject(e):resolve(row))); summary.database=true; } catch{}
-  // ClickUp: token in session
-  try { summary.clickup = !!(req.session?.user?.clickupToken); } catch{}
+  // ClickUp: consider either session OAuth token or server API key + team id
+  try {
+    const hasSession = !!(req.session?.user?.clickupToken);
+    const hasServer = !!process.env.CLICKUP_API_KEY && !!process.env.CLICKUP_TEAM_ID;
+    summary.clickup = hasSession || hasServer;
+  } catch{}
   // Drive: token in session
   try { summary.drive = !!(req.session?.user?.googleAccessToken); } catch{}
   res.json({ success:true, services: summary, timestamp: new Date().toISOString() });
@@ -1899,6 +1921,17 @@ async function testClickUpAPI(clientId, clientSecret) {
     return { success: true };
   }
   return { success: false, error: 'Missing credentials' };
+}
+
+async function testClickUpToken(apiKey){
+  try {
+    const resp = await axios.get('https://api.clickup.com/api/v2/user', { headers: { 'Authorization': apiKey } });
+    if(resp.status === 200) return { success: true };
+    return { success: false, error: 'Unexpected status ' + resp.status };
+  } catch (e){
+    const msg = e?.response?.data?.err || e?.response?.data?.error || e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  }
 }
 
 async function testDatabase() {
