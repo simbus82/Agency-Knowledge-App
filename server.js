@@ -1182,14 +1182,23 @@ app.post('/api/rag/chat', async (req, res) => {
   try {
     if (graph && Array.isArray(graph.tasks)) {
       const userClickupToken = req.session.user?.clickupToken || null;
-      const defaultTeamId = process.env.CLICKUP_TEAM_ID || null;
+      let effectiveTeamId = process.env.CLICKUP_TEAM_ID || null;
+      // Derive teamId dynamically if not set and user has OAuth token
+      if (!effectiveTeamId && userClickupToken) {
+        try {
+          const tResp = await axios.get('https://api.clickup.com/api/v2/team', {
+            headers: { 'Authorization': userClickupToken }
+          });
+          effectiveTeamId = tResp.data?.teams?.[0]?.id || null;
+        } catch(e){ logger.warning('Could not derive ClickUp team id for injection', e.message||e); }
+      }
       graph.tasks.forEach((t) => {
         if (t && t.type === 'tool_call' && typeof t.tool === 'string' && t.tool.startsWith('clickup.')) {
           t.params = t.params || {};
           if (userClickupToken && !t.params.token) t.params.token = userClickupToken;
           const fn = t.tool.split('.')[1];
-          if (!t.params.teamId && defaultTeamId && (fn === 'searchTasks' || fn === 'listSpaces')) {
-            t.params.teamId = defaultTeamId;
+          if (!t.params.teamId && effectiveTeamId && (fn === 'searchTasks' || fn === 'listSpaces')) {
+            t.params.teamId = effectiveTeamId;
           }
         }
       });
@@ -1204,6 +1213,27 @@ app.post('/api/rag/chat', async (req, res) => {
     if(/Entity annotation incomplete|Claim annotation incomplete/.test(execErr.message||'')) return res.status(500).json({ error:'annotator_failed', message:'Annotazione incompleta.' });
     return res.status(500).json({ error:'rag_failed', message:'Pipeline non riuscita.' });
   }
+  // Fallback: se non abbiamo evidenze/conclusioni e l'utente chiede task in ritardo/urgenti, interroga ClickUp direttamente
+  try {
+    const wantsOverdueGeneral = /(in\s+ritardo|ritardi|overdue|scadenz|scadut[oi]e?|urgenti?|priorit\u00e0\s*alta|alta\s*priorit\u00e0)/i.test(message||'');
+    const missingEvidence = !execResult || ((!execResult.support || !execResult.support.length) && (!execResult.conclusions || !execResult.conclusions.length) && !execResult.text);
+    if (wantsOverdueGeneral && missingEvidence) {
+      const clickup = require('./src/connectors/clickupConnector');
+      const userClickupToken = req.session.user?.clickupToken || null;
+      let teamId = process.env.CLICKUP_TEAM_ID || null;
+      if(!teamId && userClickupToken){
+        try { const tResp = await axios.get('https://api.clickup.com/api/v2/team', { headers:{ Authorization: userClickupToken } }); teamId = tResp.data?.teams?.[0]?.id || null; } catch(_){}
+      }
+      if (teamId || userClickupToken || process.env.CLICKUP_API_KEY) {
+        const chunks = await clickup.searchTasks({ teamId, overdueOnly: true, includeClosed: false, limit: 50, token: userClickupToken });
+        if (Array.isArray(chunks) && chunks.length) {
+          const support = chunks.slice(0, 15).map((c,i)=>({ id:c.id, snippet: c.text.slice(0,200), path: c.path }));
+          execResult = { conclusions: [`Trovati ${chunks.length} task rilevanti (in ritardo o aperti prossimi alla scadenza).`], support };
+          logger.info('Applied direct ClickUp fallback with support', { count: chunks.length });
+        }
+      }
+    }
+  } catch(fbErr){ logger.warning('Direct ClickUp fallback failed', { error: fbErr.message }); }
   const latency = Date.now() - startTs;
   try {
     const conclusionsJson = JSON.stringify(execResult.conclusions || execResult.result?.conclusions || []);

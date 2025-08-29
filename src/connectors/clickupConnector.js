@@ -176,11 +176,24 @@ async function searchTasks({ teamId, query = '', assignee, statuses = [], overdu
     // Filtro scadenze
     if (overdueOnly) {
       const now = Date.now();
+      const before = tasks.slice();
       tasks = tasks.filter(t => {
         const due = t.due_date ? Number(t.due_date) : null;
         const closed = (t.status?.type || '').toLowerCase() === 'done' || (t.status?.status || '').toLowerCase() === 'closed';
         return due != null && due < now && !closed;
       });
+      // Fallback: se nessun task ha due_date, proponi gli aperti ordinati per due_date (se presente) o recenti
+      if (!tasks.length && before.length) {
+        const open = before.filter(t => {
+          const closed = (t.status?.type || '').toLowerCase() === 'done' || (t.status?.status || '').toLowerCase() === 'closed';
+          return !closed;
+        });
+        tasks = open.sort((a,b)=>{
+          const ad = a.due_date? Number(a.due_date): Number.MAX_SAFE_INTEGER;
+          const bd = b.due_date? Number(b.due_date): Number.MAX_SAFE_INTEGER;
+          return ad - bd;
+        }).slice(0, limit);
+      }
     }
     // Mappa in chunks annotabili
     return tasks.slice(0, limit).map((t, i) => ({
