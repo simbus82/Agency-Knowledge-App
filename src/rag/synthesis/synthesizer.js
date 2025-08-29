@@ -42,7 +42,28 @@ async function synthesizeConversationalAnswer(query, intent, ragResult, modelId,
     const text = await claudeRequest(modelId, prompt, 1200, 0.4);
     return text || 'Risposta non generata.';
   } catch(e){
-    return 'Errore nella sintesi conversazionale.';
+    // Fallback sintetico senza LLM: mostra comunque i risultati RAG
+    try {
+      const lines = [];
+      const items = [];
+      if(Array.isArray(ragResult.support) && ragResult.support.length){
+        ragResult.support.slice(0,10).forEach((s,i)=>{
+          items.push(`- [S${i+1}] ${s.snippet}${s.path? `\n  (${s.path})`:''}`);
+        });
+      } else if(Array.isArray(ragResult.conclusions) && ragResult.conclusions.length){
+        ragResult.conclusions.slice(0,10).forEach((c,i)=> items.push(`- ${c.text||c}`));
+      } else if (typeof ragResult.text === 'string' && ragResult.text.trim()){
+        items.push(ragResult.text.slice(0,1200));
+      }
+      const header = '## Riepilogo breve\nRisultati generati senza AI di sintesi (fallback).';
+      const body = items.length? `\n\n## Dettagli\n${items.join('\n')}` : '\n\nNessun elemento trovato.';
+      const sources = (Array.isArray(ragResult.support) && ragResult.support.length)
+        ? ('\n\n## Fonti\n' + ragResult.support.slice(0,10).map((s,i)=>`[S${i+1}] ${s.path||s.id||'fonte'}`).join('\n'))
+        : '';
+      return `${header}${body}${sources}`;
+    } catch(_){
+      return 'Errore nella sintesi conversazionale.';
+    }
   }
 }
 
