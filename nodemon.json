@@ -1,0 +1,10 @@
+{
+  "watch": ["server.js", "src"],
+  "ext": "js,json",
+  "delay": "200ms",
+  "exec": "node --enable-source-maps --no-deprecation server.js",
+  "env": {
+    "NODE_ENV": "development"
+  }
+}
+
