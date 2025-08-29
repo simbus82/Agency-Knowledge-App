@@ -20,10 +20,13 @@ function mapActionToGoal(action){
   }
 }
 
-async function synthesizeConversationalAnswer(query, intent, ragResult, modelId, apiKey){
+async function synthesizeConversationalAnswer(query, intent, ragResult, modelId, apiKey, userCtx){
   const conclusions = (ragResult.conclusions||[]).map(c=> c.text || c);
   const supportMap = buildSupportMap(ragResult);
   const actionGoal = mapActionToGoal(intent.action);
+  const userName = (userCtx && userCtx.name) ? userCtx.name : '';
+  const userEmail = (userCtx && userCtx.email) ? userCtx.email : '';
+  const connMeta = `ClickUp=${(userCtx && userCtx.clickupConnected)? 'connesso':'non connesso'}, Drive=${(userCtx && userCtx.driveConnected)? 'connesso':'non connesso'}`;
   const prompt = `Sei un assistente aziendale. Rispondi come un collega competente e sintetico.\n`+
 `Query utente: "${query}"\n`+
 `Action: ${intent.action}\nGoal: ${actionGoal}\nTime range richiesto: ${intent.time_range || 'non specificato'}\n`+

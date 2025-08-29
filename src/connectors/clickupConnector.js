@@ -129,7 +129,7 @@ async function getTask({ taskId, token } = {}) {
  * Ritorna direttamente chunks annotabili per il motore RAG.
  * @param {{teamId?:string, query?:string, assignee?:string, statuses?:string[], overdueOnly?:boolean, includeClosed?:boolean, includeSubtasks?:boolean, limit?:number, token?:string}} params
  */
-async function searchTasks({ teamId, query = '', assignee, statuses = [], overdueOnly = false, includeClosed = true, includeSubtasks = true, limit = 200, token } = {}) {
+async function searchTasks({ teamId, query = '', assignee, statuses = [], overdueOnly = false, includeClosed = true, includeSubtasks = true, limit = 200, token, deep = true } = {}) {
   if (!DEFAULT_TOKEN && !token) {
     console.error("Variabile d'ambiente CLICKUP_API_KEY non impostata e nessun token fornito.");
     return [];
@@ -158,6 +158,7 @@ async function searchTasks({ teamId, query = '', assignee, statuses = [], overdu
         page += 1;
       }
     }
+    const fetchedAll = tasks.slice();
     // Filtro testuale lato client (manca un endpoint query full-text universale)
     const q = (query || '').toLowerCase();
     if (q) {
@@ -194,6 +195,19 @@ async function searchTasks({ teamId, query = '', assignee, statuses = [], overdu
           return ad - bd;
         }).slice(0, limit);
       }
+    }
+    // Deep pass: se query presente e nessun match, prova a cercare nel testo dei commenti (su un campione)
+    if (deep && q && (!tasks || tasks.length === 0) && fetchedAll.length) {
+      try {
+        const sample = fetchedAll.slice(0, Math.min(30, fetchedAll.length));
+        const commentChunks = [];
+        for (const t of sample) {
+          const comments = await getTaskComments({ taskId: t.id, limit: 50, token });
+          comments.forEach(c => { if ((c.text || '').toLowerCase().includes(q)) commentChunks.push(c); });
+          if (commentChunks.length >= limit) break;
+        }
+        if (commentChunks.length) return commentChunks.slice(0, limit);
+      } catch(e){ /* ignore deep errors */ }
     }
     // Mappa in chunks annotabili
     return tasks.slice(0, limit).map((t, i) => ({

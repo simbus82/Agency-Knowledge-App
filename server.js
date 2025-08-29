@@ -1101,6 +1101,28 @@ app.post('/api/rag/chat', async (req, res) => {
     if (!Array.isArray(intent.entities.clients)) intent.entities.clients = [];
   } catch(_){}
   let graph;
+  // Identity shortcut: answer directly using session context when user asks "chi sono io"/"who am I"
+  try {
+    const idq = /\b(chi\s+sono(\s+io)?|who\s+am\s+i)\b/i;
+    if (idq.test(message||'')) {
+      const clickupConnected = !!(req.session.user?.clickupToken || process.env.CLICKUP_API_KEY);
+      const driveConnected = !!(req.session.user?.googleAccessToken || (process.env.GOOGLE_CREDENTIALS_JSON && process.env.GOOGLE_IMPERSONATED_USER_EMAIL));
+      let clickupProfile = null;
+      if (clickupConnected) {
+        const cuToken = req.session.user?.clickupToken || process.env.CLICKUP_API_KEY;
+        try {
+          const uResp = await axios.get('https://api.clickup.com/api/v2/user', { headers: { Authorization: cuToken } });
+          const u = uResp.data?.user;
+          if (u) clickupProfile = { id: u.id, username: u.username || u.email || null };
+        } catch(e){ /* ignore profile failure */ }
+      }
+      const base = `Sei ${req.session.user?.name || 'Utente'} (${req.session.user?.email || 'n/d'}).`;
+      const conn = `Connessioni: ClickUp=${clickupConnected? 'connesso':'non connesso'}, Drive=${driveConnected? 'connesso':'non connesso'}.`;
+      const cu = clickupProfile ? `\nProfilo ClickUp: @${clickupProfile.username || 'n/d'} (id: ${clickupProfile.id || 'n/d'}).` : '';
+      const answer = `${base}\n${conn}${cu}`;
+      return res.json({ run_id: null, query: message, intent, answer, latency_ms: Date.now()-startTs, graph: { tasks: [] }, structured: { result: { conclusions: [answer], support: [] } } });
+    }
+  } catch(_){}
   try { graph = await plan(message); } catch(e){
     logger.error('Planner failed', e.message||e);
     return res.status(500).json({ error:'planner_failed', message:'Pianificazione AI non disponibile.' });
