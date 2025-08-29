@@ -13,7 +13,7 @@ I connettori forniscono accesso read / selective fetch alle fonti esterne. Ogni 
 | Nome | File | Principali Funzioni | Env Necessarie |
 |------|------|---------------------|----------------|
 | Google Drive | `googleDriveConnector.js` | `searchFiles(query)` `searchInFolders({ folderIds, query?, driveId? })` `getFileChunks({ fileId, mimeType?, fileName? })` | `GOOGLE_CLIENT_ID/SECRET` (OAuth runtime) oppure `GOOGLE_CREDENTIALS_JSON` (service) + `GOOGLE_IMPERSONATED_USER_EMAIL` (consigliato) |
-| ClickUp | `clickupConnector.js` | `getTasks({listId})` `getTask({taskId})` | `CLICKUP_API_KEY` (o OAuth UI per user driven) |
+| ClickUp | `clickupConnector.js` | `getTasks({listId, limit, token?})` `getTask({taskId, token?})` `getTaskComments({taskId, limit?, token?})` `searchTasks({teamId?, query?, statuses?, assignee?, limit?, token?})` `listTeams({token?})` `listSpaces({teamId?, token?, noCache?})` `listFolders({spaceId, token?, noCache?})` `listLists({folderId, token?, noCache?})` | `CLICKUP_API_KEY` (o OAuth UI per user driven) |
 | Gmail (optional) | `gmailConnector.js` | `searchEmails(query,maxResults)` `getEmailContent(id)` `getEmailChunks({ messageId })` | `GOOGLE_CREDENTIALS_JSON`, `GOOGLE_IMPERSONATED_USER_EMAIL` |
 
 ## Tool Registration
@@ -26,6 +26,10 @@ Lo *tool registry* vive in `src/rag/executor/executeGraph.js`. Durante l'avvio o
 }
 ```
 Il planner riceve un catalogo filtrato e può includere `tool_call` solo per i tool disponibili. I connettori Drive/Gmail/ClickUp possono restituire anche "chunks" testuali (campi: `id`, `text`, `source`, `type`, `path`, `loc`) per alimentare annotatori ed executor.
+
+Nota: quando il planner genera un `tool_call` per `clickup.*`, il server inietta automaticamente `token` (se l'utente ha fatto OAuth) e `teamId` di default da `CLICKUP_TEAM_ID` quando utile.
+
+Cache: `listTeams/listSpaces/listFolders/listLists` usano una cache in‑memory con TTL (default 5 min, overridabile via `CLICKUP_CONNECTOR_CACHE_TTL_MS`). Passa `noCache:true` per bypass.
 
 ## Parametric Templates
 I nodi `tool_call` possono referenziare output precedenti con placeholder `{t<index>.<path>}` risolti dall'executor (es: `{t1.files[0].id}`).

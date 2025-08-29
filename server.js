@@ -1127,6 +1127,23 @@ app.post('/api/rag/chat', async (req, res) => {
       if(fixed) logger.info('Planner graph sanitized', { fixed });
     }
   } catch(saniErr){ logger.error('Graph sanitize failed', saniErr.message); }
+  // Inject ClickUp token/team into tool_call params produced by planner
+  try {
+    if (graph && Array.isArray(graph.tasks)) {
+      const userClickupToken = req.session.user?.clickupToken || null;
+      const defaultTeamId = process.env.CLICKUP_TEAM_ID || null;
+      graph.tasks.forEach((t) => {
+        if (t && t.type === 'tool_call' && typeof t.tool === 'string' && t.tool.startsWith('clickup.')) {
+          t.params = t.params || {};
+          if (userClickupToken && !t.params.token) t.params.token = userClickupToken;
+          const fn = t.tool.split('.')[1];
+          if (!t.params.teamId && defaultTeamId && (fn === 'searchTasks' || fn === 'listSpaces')) {
+            t.params.teamId = defaultTeamId;
+          }
+        }
+      });
+    }
+  } catch (injectErr) { logger.warning('ClickUp param inject failed', { error: injectErr.message }); }
   const runId = require('crypto').randomUUID();
   graph.run_id = runId;
   let execResult;
