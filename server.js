@@ -1263,8 +1263,18 @@ app.post('/api/rag/chat', async (req, res) => {
           effectiveTeamId = tResp.data?.teams?.[0]?.id || null;
         } catch(e){ logger.warning('Could not derive ClickUp team id for injection', e.message||e); }
       }
-      graph.tasks.forEach((t) => {
-        if (!t || t.type !== 'tool_call' || typeof t.tool !== 'string') return;
+      // Optionally resolve assignee:'currentUser' once
+      let cuUserId = null;
+      async function ensureCuUserId(){
+        if (cuUserId || !userClickupToken) return cuUserId;
+        try {
+          const u = await axios.get('https://api.clickup.com/api/v2/user', { headers: { Authorization: userClickupToken } });
+          cuUserId = u.data?.user?.id || null;
+        } catch(e){ logger.warning('Could not resolve ClickUp current user id', e.message||e); }
+        return cuUserId;
+      }
+      for (const t of graph.tasks) {
+        if (!t || t.type !== 'tool_call' || typeof t.tool !== 'string') continue;
         t.params = t.params || {};
         // ClickUp
         if (t.tool.startsWith('clickup.')) {
@@ -1273,6 +1283,11 @@ app.post('/api/rag/chat', async (req, res) => {
           if (!t.params.teamId && effectiveTeamId && (fn === 'searchTasks' || fn === 'listSpaces')) {
             t.params.teamId = effectiveTeamId;
           }
+          // Map assignee:'currentUser' to ClickUp user id
+          if (t.params && t.params.assignee === 'currentUser') {
+            const id = await ensureCuUserId();
+            if (id) t.params.assignee = String(id);
+          }
         }
         // Google Drive: inject user OAuth token so connector can use it (fallback if no service account)
         if (t.tool.startsWith('googleDrive.')) {
@@ -1280,7 +1295,7 @@ app.post('/api/rag/chat', async (req, res) => {
             t.params.accessToken = req.session.user.googleAccessToken;
           }
         }
-      });
+      }
     }
   } catch (injectErr) { logger.warning('ClickUp param inject failed', { error: injectErr.message }); }
   const runId = require('crypto').randomUUID();

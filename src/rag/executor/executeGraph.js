@@ -69,9 +69,10 @@ async function executeGraph(graph){
   const store = {};
   for(const task of graph.tasks){
     if(task.type==='retrieve'){
-      const retrieved = await retriever.hybridSearch(task.criteria.raw, task.k || 12, task.dynamic_expansion);
-      store[task.id] = retrieved;
-      try { db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [graph.run_id||null, `retrieve:${task.id}`, JSON.stringify(retrieved.slice(0,20))]); } catch(e){}
+      const retrieved = await retriever.hybridSearch(task?.criteria?.raw || '', task.k || 12, task.dynamic_expansion);
+      const safeRetrieved = Array.isArray(retrieved) ? retrieved : [];
+      store[task.id] = safeRetrieved;
+      try { db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [graph.run_id||null, `retrieve:${task.id}`, JSON.stringify(safeRetrieved.slice(0,20))]); } catch(e){}
     } else if(task.type==='tool_call'){
       // Esegue chiamata ad uno strumento esterno dichiarato nel piano
       if(!task.tool) throw new Error(`tool_missing:${task.id}`);
@@ -109,6 +110,7 @@ async function executeGraph(graph){
       } catch(e){
         store[task.id] = { error: true, message: e.message };
         console.error('Errore tool_call', task.tool, e.message);
+        try { db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [graph.run_id||null, `tool_error:${task.id}`, JSON.stringify({ error: e.message })]); } catch(_e){}
       }
     } else if(task.type==='annotate'){
   if(!Array.isArray(task.inputs) || !task.inputs.length) throw new Error(`task_inputs_missing:${task.id}`);
@@ -161,7 +163,7 @@ function serializeForReasoner(chunks){
     labels: c.labels||[],
     entities: (c.entities||[]).slice(0,8),
     dates: c.dates||[],
-    text: c.text.slice(0,500)
+    text: (c.text||'').slice(0,500)
   }));
 }
 
@@ -198,7 +200,7 @@ async function reason(chunks, goal){
     }).filter(Boolean));
     const conclusions = ai.conclusions.map(c=>c.text);
   // chunk text map for advanced grounding
-  const chunk_map = Object.fromEntries(chunks.map(c=>[c.id, c.text]));
+  const chunk_map = Object.fromEntries(chunks.map(c=>[c.id, c.text || '']));
   const chunk_offsets = Object.fromEntries(chunks.map(c=>[c.id, { src_start: c.src_start, src_end: c.src_end }]));
   return { conclusions, support, chunk_map, chunk_offsets };
   }

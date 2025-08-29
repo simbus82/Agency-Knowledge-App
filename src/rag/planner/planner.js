@@ -5,16 +5,39 @@ const planCache = new Map();
 // Costruzione dinamica strumenti disponibili (esclude gmail se non configurato)
 function buildAvailableToolsDescriptor(){
     const parts = [];
-    parts.push(`- googleDrive:\n    - searchFiles(query: string): Cerca file in My Drive e Drive Condivisi.\n    - searchInFolders(params: { folderIds: string[], query?: string, driveId?: string }): Cerca in una o più cartelle (anche Shared Drives).\n    - getFileChunks(params: { fileId: string, mimeType?: string, fileName?: string }): Estrae chunk testuali annotabili da un file.`);
-    parts.push(`- clickup:\n    - getTasks(params: {listId: string, includeClosed?: boolean, limit?: number}): Ottiene i task da una specifica lista (con paginazione).\n    - getTask(params: {taskId: string}): Ottiene i dettagli di un singolo task.\n    - getTaskComments(params: {taskId: string, limit?: number}): Ottiene commenti del task come chunks annotabili.\n    - searchTasks(params: {teamId?: string, query?: string, assignee?: string, statuses?: string[], overdueOnly?: boolean, includeClosed?: boolean, includeSubtasks?: boolean, limit?: number}): Ricerca task a livello team e restituisce chunks. Considera titolo, descrizione, tag, nome lista/spazio/cartella, campi custom testuali. Se non trova match diretti e c'è una query, usa un deep pass nei commenti su un campione di task.\n    - listTeams(): Elenca i team disponibili.\n    - listSpaces(params: {teamId?: string}): Elenca gli spazi di un team.\n    - listFolders(params: {spaceId: string}): Elenca le cartelle di uno spazio.\n    - listLists(params: {folderId: string}): Elenca le liste di una cartella.\n\n  Hints ClickUp: i nomi cliente possono apparire in tag, campi custom (client|cliente|brand|account), nome lista/spazio/cartella, descrizione o commenti. Per "in ritardo/scadenza" usa searchTasks con overdueOnly=true e includeSubtasks=true.`);
+    // Google Drive tools
+    parts.push(`- googleDrive:
+    - searchFiles(params: { query: string }): Cerca file in My Drive e Drive Condivisi (usa name/fullText contains). Restituisce metadati file.
+    - searchInFolders(params: { folderIds: string[], query?: string, driveId?: string }): Cerca in una o più cartelle (anche Shared Drives).
+    - getFileChunks(params: { fileId: string, mimeType?: string, fileName?: string }): Estrae chunk testuali annotabili da un file.
+
+  Hints Drive:
+  - Se l'utente chiede "documenti recenti/oggi/settimana/mese", usa searchFiles con query generica (es. trashed=false) e poi getFileChunks SOLO per i 1-2 file più rilevanti.
+  - Se l'utente cita progetto/cliente/brand, costruisci query con name/fullText contains 'TERM' (max 2-3 termini specifici, evita parole generiche).
+  - Dopo searchFiles, aggiungi sempre getFileChunks su 1 file con { fileId: "{tX.files[0].id}", fileName: "{tX.files[0].name}" } per alimentare annotators.`);
+
+    // ClickUp tools
+    parts.push(`- clickup:
+    - getTasks(params: { listId: string, includeClosed?: boolean, limit?: number }): Task di una lista (con paginazione).
+    - getTask(params: { taskId: string }): Dettagli di un task.
+    - getTaskComments(params: { taskId: string, limit?: number }): Commenti del task come chunks.
+    - searchTasks(params: { teamId?: string, query?: string, assignee?: string, statuses?: string[], overdueOnly?: boolean, includeClosed?: boolean, includeSubtasks?: boolean, limit?: number }): Ricerca task a livello team; restituisce chunks (usa titolo, descrizione, tag, campi custom, lista/spazio/cartella). Se nessun match e query presente, prova deep pass nei commenti.
+
+  Hints ClickUp:
+  - Per richieste su task in ritardo/scadenza/urgenti: usa searchTasks con { overdueOnly: true, includeSubtasks: true, includeClosed: false, limit: 100 }.
+  - Se l'utente menziona progetti/clienti, metti il nome in query (es. query: 'ClienteX' o 'Progetto Y').
+  - Se chiede i "miei" task, puoi impostare assignee a uno userId noto; se non disponibile evita assignee e usa query + filtri.
+  - Dopo searchTasks, prosegui con annotate (entities, dates, claims) e reason (goal coerente: status/report/risks/listing) prima di validate/compose.`);
+
     const gmailReady = process.env.GOOGLE_CREDENTIALS_JSON && process.env.GOOGLE_IMPERSONATED_USER_EMAIL;
     if(gmailReady){
-        parts.push(`- gmail:\n    - searchEmails(query: string, maxResults?: number): Cerca email pertinenti (solo lettura).\n    - getEmailChunks(params: { messageId: string }): Restituisce chunk annotabili del corpo email.`);
+        parts.push(`- gmail:
+    - searchEmails(query: string, maxResults?: number): Cerca email pertinenti (solo lettura).
+    - getEmailChunks(params: { messageId: string }): Restituisce chunk annotabili del corpo email.`);
     }
-    parts.push(`- internal_search:\n    - retrieve(criteria: {raw: string}, k: number, dynamic_expansion: boolean): Cerca nella base di conoscenza interna (documenti ingeriti).`);
-    if(!gmailReady){
-        parts.push(`\n(Nota: gmail non configurato -> non usarlo nel piano.)`);
-    }
+    parts.push(`- internal_search:
+    - retrieve(criteria: { raw: string }, k: number, dynamic_expansion: boolean): Cerca nella base di conoscenza interna (documenti ingeriti).`);
+    if(!gmailReady){ parts.push(`\n(Nota: gmail non configurato -> non usarlo nel piano.)`); }
     return parts.join('\n');
 }
 
@@ -27,17 +50,23 @@ Il tuo compito è trasformare una query utente in un piano eseguibile come un gr
 
 La query dell'utente è: "${query}"
 
-Puoi usare una base di conoscenza interna o degli strumenti esterni per ottenere informazioni aggiornate.
-Ecco gli strumenti disponibili:
+Puoi usare la base di conoscenza interna e/o strumenti esterni per ottenere informazioni aggiornate.
+Ecco gli strumenti disponibili e le linee guida d'uso:
 ${buildAvailableToolsDescriptor()}
 
+Decision rules (scegli gli strumenti giusti):
+- Se la query parla di task/attività, scadenze, in ritardo, priorità, o assegnazioni → usa ClickUp (searchTasks) e poi annota + reason.
+- Se la query parla di documenti/file, Drive, briefing, report, presentazioni, o documenti recenti → usa Google Drive (searchFiles o searchInFolders) + getFileChunks.
+- Se la query combina entrambe le fonti (es. "confronta task con documento") → usa entrambi e poi 'correlate'.
+- Se la query è molto generica o storica → aggiungi anche 'retrieve' dalla knowledge base interna.
+
 Regole per la pianificazione:
-1.  Tipi di task consentiti: 'retrieve' (per internal_search), 'tool_call', 'annotate', 'correlate', 'reason', 'validate', 'compose'.
-2.  'tool_call': si usa per chiamare strumenti esterni. Il campo 'tool' deve contenere 'nomeStrumento.nomeFunzione' (es. 'googleDrive.searchFiles') e 'params' deve essere un oggetto con i parametri della funzione.
-3.  'retrieve': si usa per la ricerca interna.
-4.  Dipendenze: Ogni task (tranne il primo) DEVE avere un campo "inputs": [...] con gli id dei task precedenti.
-5.  Flusso: Inizia con 'retrieve' o 'tool_call' per raccogliere i dati. Prosegui con 'annotate' per arricchirli, 'reason' o 'correlate' per analizzarli, e termina sempre con 'validate' e 'compose'.
-6.  Se la domanda richiede un confronto tra dati da fonti diverse (es. file su Drive, task ClickUp, email Gmail), crea un piano che chiama gli strumenti necessari e poi usa un task 'correlate' per confrontare/aggregare i risultati.
+1. Tipi task: 'retrieve', 'tool_call', 'annotate', 'correlate', 'reason', 'validate', 'compose'.
+2. 'tool_call': usa 'nomeStrumento.nomeFunzione' (es. 'googleDrive.searchFiles') con 'params' oggetto.
+3. Ogni task (tranne il primo) DEVE avere "inputs": [...].
+4. Flusso minimo: raccolta dati ('tool_call' o 'retrieve') → 'annotate' (entities, dates, claims) → 'reason' (goal coerente) → 'validate' → 'compose'.
+5. Per ClickUp 'in ritardo/scadenza': preferisci searchTasks con { overdueOnly:true, includeSubtasks:true, includeClosed:false, limit:100 }.
+6. Per Drive dopo 'searchFiles' seleziona 1 file e chiama 'getFileChunks' usando placeholders {tX.files[0].id}.
 
 Esempi di piani:
 
@@ -87,6 +116,33 @@ Query: "Suggerisci miglioramenti al processo di onboarding considerando task Cli
     { "id": "t9", "type": "reason", "goal": "recommendations", "inputs": ["t8"] },
     { "id": "t10", "type": "validate", "inputs": ["t9"] },
     { "id": "t11", "type": "compose", "format": "text", "inputs": ["t10"] }
+  ]
+}
+
+4) Task in ritardo per progetto specifico (ClickUp)
+Query: "Quali task del progetto Thermae sono in ritardo?"
+{
+  "intents": ["status", "listing"],
+  "tasks": [
+    { "id": "t1", "type": "tool_call", "tool": "clickup.searchTasks", "params": { "query": "Thermae", "overdueOnly": true, "includeClosed": false, "includeSubtasks": true, "limit": 100 } },
+    { "id": "t2", "type": "annotate", "annotators": ["entities", "dates", "claims"], "inputs": ["t1"] },
+    { "id": "t3", "type": "reason", "goal": "status", "inputs": ["t2"] },
+    { "id": "t4", "type": "validate", "inputs": ["t3"] },
+    { "id": "t5", "type": "compose", "format": "text", "inputs": ["t4"] }
+  ]
+}
+
+5) Documenti recenti (Drive)
+Query: "Mostrami i documenti modificati oggi su Drive per Bebilandia"
+{
+  "intents": ["listing"],
+  "tasks": [
+    { "id": "t1", "type": "tool_call", "tool": "googleDrive.searchFiles", "params": { "query": "(name contains 'Bebilandia' or fullText contains 'Bebilandia') and trashed = false" } },
+    { "id": "t2", "type": "tool_call", "tool": "googleDrive.getFileChunks", "params": { "fileId": "{t1.files[0].id}", "fileName": "{t1.files[0].name}" } },
+    { "id": "t3", "type": "annotate", "annotators": ["entities", "dates"], "inputs": ["t2"] },
+    { "id": "t4", "type": "reason", "goal": "listing", "inputs": ["t3"] },
+    { "id": "t5", "type": "validate", "inputs": ["t4"] },
+    { "id": "t6", "type": "compose", "format": "text", "inputs": ["t5"] }
   ]
 }
 
