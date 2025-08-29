@@ -2,6 +2,7 @@
 const { google } = require('googleapis');
 const stream = require('stream');
 const crypto = require('crypto');
+const axios = require('axios');
 
 let driveClient;
 function getDriveClient() {
@@ -36,24 +37,40 @@ function getDriveClient() {
 
 /**
  * Cerca file in Google Drive.
- * @param {string} query - La query di ricerca (es. "name contains 'offerta'").
+ * @param {{ query:string, accessToken?:string, driveId?:string, pageSize?:number }} params
  * @returns {Promise<Array>} - Un array di oggetti file.
  */
-async function searchFiles(query) {
-    const client = getDriveClient();
-    if (!client) return [];
+async function searchFiles({ query, accessToken, driveId, pageSize = 50 } = {}) {
     try {
+        if (accessToken) {
+            const resp = await axios.get('https://www.googleapis.com/drive/v3/files', {
+                headers: { Authorization: `Bearer ${accessToken}` },
+                params: {
+                    q: query,
+                    fields: 'files(id,name,mimeType,webViewLink,driveId,parents)',
+                    pageSize,
+                    includeItemsFromAllDrives: true,
+                    supportsAllDrives: true,
+                    corpora: driveId ? 'drive' : 'allDrives',
+                    driveId
+                }
+            });
+            return resp.data?.files || [];
+        }
+        const client = getDriveClient();
+        if (!client) return [];
         const response = await client.files.list({
             q: query,
             fields: 'files(id, name, mimeType, webViewLink, driveId, parents)',
-            pageSize: 50,
+            pageSize,
             includeItemsFromAllDrives: true,
             supportsAllDrives: true,
-            corpora: 'allDrives'
+            corpora: driveId ? 'drive' : 'allDrives',
+            driveId
         });
         return response.data.files || [];
     } catch (error) {
-        console.error("Errore durante la ricerca di file su Google Drive:", error.message);
+        console.error("Errore durante la ricerca di file su Google Drive:", error.response?.data?.error?.message || error.message);
         return [];
     }
 }
@@ -138,6 +155,104 @@ function textToChunks(text, meta={}){
  */
 async function getFileChunks({ fileId, mimeType, fileName }){
     const content = await getFileContent(fileId, mimeType);
+    if(!content) return [];
+    return textToChunks(content, { fileId, fileName });
+}
+
+// --- Enhanced OAuth-compatible implementations (appended to override above) ---
+
+/**
+ * Cerca file in una o più cartelle (override): supporta accessToken OAuth.
+ * @param {{ folderIds: string[], query?: string, driveId?: string, accessToken?:string }} params
+ */
+async function searchInFolders({ folderIds = [], query = '', driveId = undefined, accessToken } = {}){
+    if (!Array.isArray(folderIds) || folderIds.length === 0) return [];
+    const parentsQ = '(' + folderIds.map(id => `'${id}' in parents`).join(' or ') + ')';
+    const safe = (s='') => (s || '').toString().replace(/'/g, "\\'");
+    const nameQ = query ? ` and (name contains '${safe(query)}' or fullText contains '${safe(query)}')` : '';
+    const q = `${parentsQ}${nameQ} and trashed = false`;
+    try {
+        if (accessToken) {
+            const resp = await axios.get('https://www.googleapis.com/drive/v3/files', {
+                headers: { Authorization: `Bearer ${accessToken}` },
+                params: {
+                    q,
+                    fields: 'files(id,name,mimeType,webViewLink,driveId,parents)',
+                    pageSize: 100,
+                    includeItemsFromAllDrives: true,
+                    supportsAllDrives: true,
+                    corpora: driveId ? 'drive' : 'allDrives',
+                    driveId
+                }
+            });
+            return resp.data?.files || [];
+        }
+        // fallback to service client
+        const client = getDriveClient();
+        if (!client) return [];
+        const response = await client.files.list({
+            q,
+            fields: 'files(id, name, mimeType, webViewLink, driveId, parents)',
+            pageSize: 100,
+            includeItemsFromAllDrives: true,
+            supportsAllDrives: true,
+            corpora: driveId ? 'drive' : 'allDrives',
+            driveId
+        });
+        return response.data.files || [];
+    } catch (error) {
+        console.error('Errore durante la ricerca in cartelle Drive:', error.response?.data?.error?.message || error.message);
+        return [];
+    }
+}
+
+/**
+ * Scarica contenuto file (override) – supporta accessToken OAuth.
+ * @param {{ fileId:string, mimeType?:string, accessToken?:string }} params
+ */
+async function getFileContent({ fileId, mimeType, accessToken }) {
+    try {
+        if (accessToken) {
+            if (mimeType && /google-apps/.test(mimeType)) {
+                const resp = await axios.get(`https://www.googleapis.com/drive/v3/files/${fileId}/export`, {
+                    headers: { Authorization: `Bearer ${accessToken}` },
+                    params: { mimeType: 'text/plain' },
+                    responseType: 'text'
+                });
+                return typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
+            }
+            const resp = await axios.get(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+                headers: { Authorization: `Bearer ${accessToken}` },
+                params: { alt: 'media' },
+                responseType: 'arraybuffer'
+            });
+            return Buffer.from(resp.data).toString('utf8');
+        }
+        // fallback to service client
+        const client = getDriveClient();
+        if (!client) return null;
+        let response;
+        if (mimeType && mimeType.includes('google-apps')) {
+            response = await client.files.export({ fileId, mimeType: 'text/plain' }, { responseType: 'stream' });
+        } else {
+            response = await client.files.get({ fileId, alt: 'media' }, { responseType: 'stream' });
+        }
+        const reader = new stream.PassThrough();
+        response.data.pipe(reader);
+        let content = '';
+        for await (const chunk of reader) { content += chunk.toString(); }
+        return content;
+    } catch (error) {
+        console.error(`Errore durante il recupero del contenuto del file ${fileId}:`, error.response?.data?.error?.message || error.message);
+        return null;
+    }
+}
+
+/**
+ * Chunking (override) – accetta accessToken e lo propaga a getFileContent
+ */
+async function getFileChunks({ fileId, mimeType, fileName, accessToken }){
+    const content = await getFileContent({ fileId, mimeType, accessToken });
     if(!content) return [];
     return textToChunks(content, { fileId, fileName });
 }

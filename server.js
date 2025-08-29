@@ -28,7 +28,7 @@ const AIFirstEngine = require('./src/engines/ai-first-engine');
 const { plan } = require('./src/rag/planner/planner');
 const { executeGraph } = require('./src/rag/executor/executeGraph');
 const { embedAndStoreLexiconTerms } = require('./src/rag/util/embeddings');
-const { claudePing } = require('./src/rag/ai/claudeClient');
+const { claudePing, claudeRequest } = require('./src/rag/ai/claudeClient');
 const { ingestDriveContent } = require('./src/rag/util/ingestProcessor');
 // Legacy engines removed (AIExecutiveEngine, BusinessIntelligence)
 
@@ -44,6 +44,8 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.static('public'));
+// Silence missing favicon 404s (browsers request /favicon.ico by default)
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-this',
   resave: false,
@@ -1086,6 +1088,19 @@ app.post('/api/rag/chat', async (req, res) => {
   const startTs = Date.now();
   const { parseIntent } = require('./src/rag/util/intentParser');
   const { synthesizeConversationalAnswer } = require('./src/rag/synthesis/synthesizer');
+  // Small-talk / greeting shortcut: keep it friendly and useful without RAG
+  try {
+    const m = (message||'').trim().toLowerCase();
+    const isGreeting = /^(ciao|hey|ehi|salve|buongiorno|buonasera|hola|hello|hi)[!.\s]*$/.test(m) || m.length <= 4;
+    if (isGreeting) {
+      const userName = req.session.user?.name?.split(' ')[0] || 'Simone';
+      const clickupConnected = !!(req.session.user?.clickupToken || process.env.CLICKUP_API_KEY);
+      const driveConnected = !!(req.session.user?.googleAccessToken || (process.env.GOOGLE_CREDENTIALS_JSON && process.env.GOOGLE_IMPERSONATED_USER_EMAIL));
+      const prompt = `Sei l'Assistente Esecutivo AI di 56k Agency. Saluta l'utente (${userName}) in modo caldo e professionale in italiano, spiega brevemente cosa puoi fare con le connessioni disponibili e proponi 3 esempi di domande utili.\nConnessioni: ClickUp=${clickupConnected?'connesso':'non connesso'}, Drive=${driveConnected?'connesso':'non connesso'}. Non chiedere autorizzazioni tecniche, proponi direttamente azioni.`;
+      const text = await claudeRequest(process.env.CLAUDE_RAG_UTILITY_MODEL || process.env.SELECTED_CLAUDE_MODEL || 'claude-sonnet-4-20250514', prompt, 400, 0.2);
+      return res.json({ run_id: null, query: message, intent: { action:'CHAT', entities:{projects:[],clients:[]} }, answer: text, latency_ms: Date.now()-startTs, graph: { tasks: [] }, structured: { result: { conclusions: [text], support: [] } } });
+    }
+  } catch(_){}
   let intent;
   try {
     intent = await parseIntent(message);
@@ -1107,19 +1122,53 @@ app.post('/api/rag/chat', async (req, res) => {
     if (idq.test(message||'')) {
       const clickupConnected = !!(req.session.user?.clickupToken || process.env.CLICKUP_API_KEY);
       const driveConnected = !!(req.session.user?.googleAccessToken || (process.env.GOOGLE_CREDENTIALS_JSON && process.env.GOOGLE_IMPERSONATED_USER_EMAIL));
-      let clickupProfile = null;
-      if (clickupConnected) {
-        const cuToken = req.session.user?.clickupToken || process.env.CLICKUP_API_KEY;
-        try {
+      const name = req.session.user?.name || 'Utente';
+      const email = req.session.user?.email || 'n/d';
+      // Enrich with lightweight live data
+      let cuSummary = '';
+      try {
+        if (clickupConnected) {
+          const cuToken = req.session.user?.clickupToken || process.env.CLICKUP_API_KEY;
           const uResp = await axios.get('https://api.clickup.com/api/v2/user', { headers: { Authorization: cuToken } });
-          const u = uResp.data?.user;
-          if (u) clickupProfile = { id: u.id, username: u.username || u.email || null };
-        } catch(e){ /* ignore profile failure */ }
-      }
-      const base = `Sei ${req.session.user?.name || 'Utente'} (${req.session.user?.email || 'n/d'}).`;
-      const conn = `Connessioni: ClickUp=${clickupConnected? 'connesso':'non connesso'}, Drive=${driveConnected? 'connesso':'non connesso'}.`;
-      const cu = clickupProfile ? `\nProfilo ClickUp: @${clickupProfile.username || 'n/d'} (id: ${clickupProfile.id || 'n/d'}).` : '';
-      const answer = `${base}\n${conn}${cu}`;
+          const me = uResp.data?.user; const userId = me?.id;
+          // derive team id
+          let teamId = process.env.CLICKUP_TEAM_ID;
+          if (!teamId) {
+            try { const t = await axios.get('https://api.clickup.com/api/v2/team', { headers:{ Authorization: cuToken } }); teamId = t.data?.teams?.[0]?.id; } catch{}
+          }
+          let openCount = 0, overdue = 0; let sample = [];
+          if (teamId && userId) {
+            const params = { page: 0, include_closed: true, subtasks: true };
+            params['assignees[]'] = [userId];
+            const tResp = await axios.get(`https://api.clickup.com/api/v2/team/${teamId}/task`, { headers: { Authorization: cuToken }, params });
+            const tasks = tResp.data?.tasks || [];
+            const now = Date.now();
+            const isClosed = (t) => ((t.status?.type||'').toLowerCase()==='done') || ((t.status?.status||'').toLowerCase()==='closed');
+            openCount = tasks.filter(t=>!isClosed(t)).length;
+            overdue = tasks.filter(t=>!isClosed(t) && t.due_date && Number(t.due_date) < now).length;
+            sample = tasks.slice(0,3).map(t=>`- ${t.name}${(t.due_date && Number(t.due_date) < now)?' (in ritardo)':''}`);
+          }
+          cuSummary = `\n\nTask (ClickUp):\n- Assegnati (aperti): ${openCount}${overdue? `\n- In ritardo: ${overdue}`:''}${sample.length? `\nEsempi:\n${sample.join('\n')}`:''}`;
+        }
+      } catch(_){}
+      let driveSummary = '';
+      try {
+        if (driveConnected && req.session.user?.googleAccessToken) {
+          const dResp = await axios.get('https://www.googleapis.com/drive/v3/files', {
+            headers: { Authorization: `Bearer ${req.session.user.googleAccessToken}` },
+            params: { orderBy: 'modifiedTime desc', pageSize: 5, fields: 'files(id,name,modifiedTime,webViewLink,owners)' }
+          });
+          const files = dResp.data?.files || [];
+          if (files.length) {
+            const lines = files.map(f=>`- ${f.name} (${new Date(f.modifiedTime).toLocaleDateString('it-IT')})`);
+            driveSummary = `\n\nDocumenti recenti (Drive):\n${lines.join('\n')}`;
+          }
+        }
+      } catch(_){}
+      const header = `Ciao ${name}! Sono il tuo Assistente Esecutivo AI di 56k Agency.`;
+      const who = `\n\nChi sei – Profilo\n- Nome: ${name}\n- Email: ${email}\n- Connessioni: ClickUp=${clickupConnected? 'connesso':'non connesso'}, Drive=${driveConnected? 'connesso':'non connesso'}`;
+      const next = `\n\nCosa posso fare per te\n- Aggiornarti sui task e priorità\n- Cercare documenti e riassumerli\n- Incrociare informazioni tra fonti per insight`;
+      const answer = `${header}${who}${cuSummary}${driveSummary}${next}`;
       return res.json({ run_id: null, query: message, intent, answer, latency_ms: Date.now()-startTs, graph: { tasks: [] }, structured: { result: { conclusions: [answer], support: [] } } });
     }
   } catch(_){}
@@ -1215,12 +1264,20 @@ app.post('/api/rag/chat', async (req, res) => {
         } catch(e){ logger.warning('Could not derive ClickUp team id for injection', e.message||e); }
       }
       graph.tasks.forEach((t) => {
-        if (t && t.type === 'tool_call' && typeof t.tool === 'string' && t.tool.startsWith('clickup.')) {
-          t.params = t.params || {};
+        if (!t || t.type !== 'tool_call' || typeof t.tool !== 'string') return;
+        t.params = t.params || {};
+        // ClickUp
+        if (t.tool.startsWith('clickup.')) {
           if (userClickupToken && !t.params.token) t.params.token = userClickupToken;
           const fn = t.tool.split('.')[1];
           if (!t.params.teamId && effectiveTeamId && (fn === 'searchTasks' || fn === 'listSpaces')) {
             t.params.teamId = effectiveTeamId;
+          }
+        }
+        // Google Drive: inject user OAuth token so connector can use it (fallback if no service account)
+        if (t.tool.startsWith('googleDrive.')) {
+          if (req.session.user?.googleAccessToken && !t.params.accessToken) {
+            t.params.accessToken = req.session.user.googleAccessToken;
           }
         }
       });
