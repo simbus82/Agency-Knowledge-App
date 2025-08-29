@@ -161,10 +161,16 @@ async function searchTasks({ teamId, query = '', assignee, statuses = [], overdu
     // Filtro testuale lato client (manca un endpoint query full-text universale)
     const q = (query || '').toLowerCase();
     if (q) {
+      const has = (v) => (v || '').toString().toLowerCase().includes(q);
       tasks = tasks.filter(t => {
-        const name = (t.name || '').toLowerCase();
-        const desc = (t.description || '').toLowerCase();
-        return name.includes(q) || desc.includes(q);
+        if (has(t.name) || has(t.description)) return true;
+        if (Array.isArray(t.tags) && t.tags.some(tag => has(tag.name))) return true;
+        if (t.list && (has(t.list.name) || has(t.list.id))) return true;
+        if (t.space && has(t.space.name)) return true;
+        if (t.folder && has(t.folder.name)) return true;
+        // custom fields scan (best-effort)
+        if (Array.isArray(t.custom_fields) && t.custom_fields.some(cf => has(cf.name) || has(cf.value) || has(cf.text_value))) return true;
+        return false;
       });
     }
     // Filtro scadenze

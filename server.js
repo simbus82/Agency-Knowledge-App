@@ -1094,11 +1094,62 @@ app.post('/api/rag/chat', async (req, res) => {
     const detail = (e && e.cause && (e.cause.response?.data?.error?.message || e.cause.code || e.cause.message)) || '';
     return res.status(503).json({ error: 'ai_unavailable', message: 'Servizio AI non raggiungibile (intent). Verifica connessione o chiave API.', detail });
   }
+  // Sanitize intent entities arrays for downstream usage (synthesizer)
+  try {
+    intent.entities = intent.entities || {};
+    if (!Array.isArray(intent.entities.projects)) intent.entities.projects = [];
+    if (!Array.isArray(intent.entities.clients)) intent.entities.clients = [];
+  } catch(_){}
   let graph;
   try { graph = await plan(message); } catch(e){
     logger.error('Planner failed', e.message||e);
     return res.status(500).json({ error:'planner_failed', message:'Pianificazione AI non disponibile.' });
   }
+  // Planner augmentation based on intent/entities (client/project keywords)
+  try {
+    const hasClickUp = Array.isArray(graph.tasks) && graph.tasks.some(t=> t.type==='tool_call' && typeof t.tool==='string' && t.tool.startsWith('clickup.'));
+    if (!hasClickUp && Array.isArray(graph.tasks)) {
+      const keywords = [];
+      (intent.entities?.clients||[]).forEach(c=> c && keywords.push(c));
+      (intent.entities?.projects||[]).forEach(p=> p && keywords.push(p));
+      const wantsTasks = /\b(task|tasks|tickets?|attivit[àa]|to-?do|lavori)\b/i.test(message);
+      if (keywords.length || wantsTasks) {
+        const queryTerm = keywords[0] || (message.slice(0,64));
+        const newId = 't_clickup_search';
+        const newTask = { id: newId, type:'tool_call', tool:'clickup.searchTasks', params:{ query: queryTerm, includeClosed:true, includeSubtasks:true, limit: 200 } };
+        const idxAnnot = graph.tasks.findIndex(t=> t.type==='annotate');
+        const idxReason = graph.tasks.findIndex(t=> t.type==='reason');
+        const insertAt = idxAnnot >= 0 ? idxAnnot : (idxReason >= 0 ? idxReason : graph.tasks.length);
+        graph.tasks.splice(insertAt, 0, newTask);
+        const target = graph.tasks.find(t=> t.type==='annotate') || graph.tasks.find(t=> t.type==='reason') || null;
+        if (target) {
+          target.inputs = Array.isArray(target.inputs) ? Array.from(new Set([...target.inputs, newId])) : [newId];
+        }
+        logger.info('Auto-injected clickup.searchTasks based on intent/entities', { query: queryTerm });
+      }
+    }
+  } catch(augErr) { logger.warning('Planner augmentation (intent) failed', { error: augErr.message }); }
+  // Heuristic auto-augmentation: if query asks for overdue/urgent tasks and planner didn't add ClickUp, inject a ClickUp searchTasks node
+  try {
+    const text = (message||'').toLowerCase();
+    const wantsOverdue = /(in\s+ritardo|ritardi|overdue|scadenz|scadut[oi]e?|urgenti?|priorit\u00e0\s*alta|alta\s*priorit\u00e0)/i.test(text);
+    const hasClickUp = Array.isArray(graph.tasks) && graph.tasks.some(t=> t.type==='tool_call' && typeof t.tool==='string' && t.tool.startsWith('clickup.'));
+    if (wantsOverdue && !hasClickUp && Array.isArray(graph.tasks)) {
+      const newId = 't_clickup_overdue';
+      const newTask = { id: newId, type:'tool_call', tool:'clickup.searchTasks', params:{ overdueOnly:true, includeClosed:false, limit:100 } };
+      // Insert before first annotate if present, else before reason, else at end
+      const idxAnnot = graph.tasks.findIndex(t=> t.type==='annotate');
+      const idxReason = graph.tasks.findIndex(t=> t.type==='reason');
+      const insertAt = idxAnnot >= 0 ? idxAnnot : (idxReason >= 0 ? idxReason : graph.tasks.length);
+      graph.tasks.splice(insertAt, 0, newTask);
+      // Ensure downstream stages consider these results: include in the first annotate/reason task inputs if present
+      const target = graph.tasks.find(t=> t.type==='annotate') || graph.tasks.find(t=> t.type==='reason') || null;
+      if (target) {
+        target.inputs = Array.isArray(target.inputs) ? Array.from(new Set([...target.inputs, newId])) : [newId];
+      }
+      logger.info('Auto-injected clickup.searchTasks for overdue intent');
+    }
+  } catch(autoErr) { logger.warning('Auto augmentation failed', { error: autoErr.message }); }
   try {
     graph.intents = Array.isArray(graph.intents)? Array.from(new Set([...graph.intents, intent.action.toLowerCase()])) : [intent.action.toLowerCase()];
     const reasonTask = graph.tasks.find(t=>t.type==='reason');

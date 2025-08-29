@@ -347,7 +347,7 @@ async function sendMessage() {
                     } catch{}
                     // Trasforma marcatori [S1] in span cliccabili prima di markdown render
                     answerText = answerText.replace(/\[S(\d+)\]/g, (m,n)=>`<span class="source-ref" data-ref="S${n}">[S${n}]</span>`);
-                    const msgEl = UIManager.addMessage('ai', answerText, { rawHtml: true });
+                    const msgEl = UIManager.addMessage('ai', answerText);
                     try {
                         msgEl.querySelectorAll('.source-ref').forEach(el=>{
                             el.style.cursor='pointer';
