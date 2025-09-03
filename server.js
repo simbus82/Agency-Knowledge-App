@@ -3,17 +3,11 @@ const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
 const axios = require('axios');
-const { OAuth2Client } = require('google-auth-library');
 const crypto = require('crypto');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
-const pdfParse = require('pdf-parse');
-const mammoth = require('mammoth');
-const ExcelJS = require('exceljs');
-const unzipper = require('unzipper');
-const xml2js = require('xml2js');
-const archiver = require('archiver');
+// Removed legacy binary parsers (handled by Drive export)
 require('dotenv').config();
 
 // Hard requirement: application must not run without LLM key
@@ -22,14 +16,8 @@ if(!process.env.CLAUDE_API_KEY){
   process.exit(1);
 }
 
-// Import AI-First Engine (new structured path)
-const AIFirstEngine = require('./src/engines/ai-first-engine');
-// RAG generalized modules (MVP)
-const { plan } = require('./src/rag/planner/planner');
-const { executeGraph } = require('./src/rag/executor/executeGraph');
-const { embedAndStoreLexiconTerms } = require('./src/rag/util/embeddings');
-const { claudePing, claudeRequest } = require('./src/rag/ai/claudeClient');
-const { ingestDriveContent } = require('./src/rag/util/ingestProcessor');
+// RAG connectivity
+const { claudePing } = require('./src/rag/ai/claudeClient');
 // Legacy engines removed (AIExecutiveEngine, BusinessIntelligence)
 
 const app = express();
@@ -57,24 +45,44 @@ app.use(session({
   }
 }));
 
-// Lightweight version endpoint (health tooling / debugging)
-app.get('/version', (req, res) => {
-  res.json({ version: APP_VERSION, timestamp: new Date().toISOString() });
-});
+// Routers
+const statusRouter = require('./src/routes/status')({ APP_VERSION, claudePing, testDatabase });
+app.use(statusRouter);
 
-// Connectivity: Claude AI ping (deep health)
-app.get('/api/claude/ping', async (req, res) => {
-  if(!process.env.CLAUDE_API_KEY){
-    return res.status(400).json({ ok:false, error:'missing_key' });
-  }
-  try {
-    const out = await claudePing(5000);
-    return res.json({ ok:true, model: out.model });
-  } catch(e){
-    const msg = e?.code || e?.message || 'unknown_error';
-    return res.status(503).json({ ok:false, error: msg });
-  }
+// Lib helpers (DI closures)
+const { getCachedOrFetch: _getCachedOrFetch } = require('./src/lib/cache');
+const { getUserClickUpToken: _getUserClickUpToken, getUserGoogleToken: _getUserGoogleToken } = require('./src/lib/tokens');
+const { isAdminRequest: _isAdminRequest } = require('./src/lib/admin');
+const { fetchDriveFileContentWithCacheFactory } = require('./src/lib/drive');
+const getUserClickUpToken = (req)=> _getUserClickUpToken(db, req);
+const getUserGoogleToken = (req)=> _getUserGoogleToken(db, req, logger);
+const getCachedOrFetch = (key, ttl, fn)=> _getCachedOrFetch(db, 'clickup_cache', key, ttl, fn);
+const fetchDriveFileContentWithCache = fetchDriveFileContentWithCacheFactory({ db, axios, logger });
+const isAdminRequest = _isAdminRequest;
+
+// Mount RAG / ClickUp / Drive routers (dependency-injected)
+const ragRouter = require('./src/routes/rag')({
+  db,
+  logger,
+  axios,
+  plan: require('./src/rag/planner/planner').plan,
+  executeGraph: require('./src/rag/executor/executeGraph').executeGraph,
+  parseIntent: require('./src/rag/util/intentParser').parseIntent,
+  synthesizeConversationalAnswer: require('./src/rag/synthesis/synthesizer').synthesizeConversationalAnswer,
+  embedAndStoreLexiconTerms: require('./src/rag/util/embeddings').embedAndStoreLexiconTerms,
+  ingestDriveContent: require('./src/rag/util/ingestProcessor').ingestDriveContent,
+  sanitizeModelId,
+  claudeRequest: require('./src/rag/ai/claudeClient').claudeRequest,
+  getUserGoogleToken,
+  isAdminRequest
 });
+app.use(ragRouter);
+
+const clickupRouter = require('./src/routes/clickup')({ axios, logger, getUserClickUpToken, getCachedOrFetch });
+app.use(clickupRouter);
+
+const driveRouter = require('./src/routes/drive')({ axios, logger, getUserGoogleToken, fetchDriveFileContentWithCache });
+app.use(driveRouter);
 
 // Initialize SQLite database for config and conversations
 const db = new sqlite3.Database('./data/knowledge_hub.db');
@@ -251,125 +259,12 @@ db.serialize(() => {
   )`);
 });
 
-// Logger
-class Logger {
-  constructor() {
-    this.logDir = './logs';
-    if (!fs.existsSync(this.logDir)) {
-      fs.mkdirSync(this.logDir, { recursive: true });
-    }
-  }
+// Logger centralizzato
+const logger = require('./src/lib/logger');
 
-  log(level, message, data = {}) {
-    const timestamp = new Date().toISOString();
-    const logEntry = {
-      timestamp,
-      level,
-      message,
-      data
-    };
+// Legacy helpers removed: encryption, cache (moved to src/lib)
 
-    // Console log
-    console.log(`[${timestamp}] [${level.toUpperCase()}] ${message}`, data);
-
-    // File log
-    const logFile = path.join(this.logDir, `${new Date().toISOString().split('T')[0]}.log`);
-    fs.appendFileSync(logFile, JSON.stringify(logEntry) + '\n');
-  }
-
-  info(message, data) { this.log('info', message, data); }
-  error(message, data) { this.log('error', message, data); }
-  warning(message, data) { this.log('warning', message, data); }
-}
-
-const logger = new Logger();
-
-// Max bytes to download/parse from Drive (default 10 MB)
-const DRIVE_MAX_BYTES = parseInt(process.env.DRIVE_MAX_BYTES, 10) || (10 * 1024 * 1024);
-
-// Encryption helpers for tokens
-const ENC_ALGO = 'aes-256-gcm';
-const ENC_KEY = process.env.TOKEN_ENC_KEY || null; // must be 32 bytes base64
-function encryptToken(plain) {
-  if (!ENC_KEY) return plain;
-  const key = Buffer.from(ENC_KEY, 'base64');
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv(ENC_ALGO, key, iv);
-  const encrypted = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return Buffer.concat([iv, tag, encrypted]).toString('base64');
-}
-
-function decryptToken(enc) {
-  if (!ENC_KEY) return enc;
-  try {
-    const key = Buffer.from(ENC_KEY, 'base64');
-    const data = Buffer.from(enc, 'base64');
-    const iv = data.slice(0, 12);
-    const tag = data.slice(12, 28);
-    const encrypted = data.slice(28);
-    const decipher = crypto.createDecipheriv(ENC_ALGO, key, iv);
-    decipher.setAuthTag(tag);
-    const out = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-    return out.toString('utf8');
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * Helper: getCachedOrFetch using sqlite as cache store
- * key: string cache key
- * ttlSeconds: time-to-live in seconds
- * fetchFn: async function that returns data to cache
- */
-function getCachedOrFetch(key, ttlSeconds, fetchFn) {
-  return new Promise((resolve, reject) => {
-    db.get('SELECT value, updated_at FROM clickup_cache WHERE key = ?', [key], async (err, row) => {
-      if (err) return reject(err);
-
-      const now = Date.now();
-      if (row && row.updated_at) {
-        const updated = new Date(row.updated_at).getTime();
-        if ((now - updated) < (ttlSeconds * 1000)) {
-          try {
-            return resolve(JSON.parse(row.value));
-          } catch (e) {
-            // fall through to fetch
-          }
-        }
-      }
-
-      try {
-        const fresh = await fetchFn();
-        const value = JSON.stringify(fresh);
-        const updated_at = new Date().toISOString();
-        db.run('INSERT OR REPLACE INTO clickup_cache (key, value, updated_at) VALUES (?,?,?)', [key, value, updated_at], (e) => {
-          if (e) logger.error('Failed to write cache', e);
-        });
-        return resolve(fresh);
-      } catch (fetchErr) {
-        // On fetch error, return stale cache if present
-        if (row && row.value) {
-          try { return resolve(JSON.parse(row.value)); } catch (e) { /* ignore */ }
-        }
-        return reject(fetchErr);
-      }
-    });
-  });
-}
-
-// Helper to get current user's Google access token
-async function getUserGoogleToken(req) {
-  if (!req.session.user) throw new Error('Not authenticated');
-  return new Promise((resolve, reject) => {
-    db.get('SELECT google_access_token FROM users WHERE email = ?', [req.session.user.email], (err, row) => {
-      if (err) return reject(err);
-      // Prefer session token if present
-      resolve(req.session.user.googleAccessToken || row?.google_access_token || null);
-    });
-  });
-}
+// Legacy token helper removed (moved to src/lib/tokens)
 
 // Fetch (and cache) exported text content for Google-native files
 async function fetchDriveFileContentWithCache(fileId, accessToken) {
@@ -502,53 +397,7 @@ async function fetchDriveFileContentWithCache(fileId, accessToken) {
   });
 }
 
-// Endpoint: export Drive file content (Google-native) - returns truncated contentText
-app.get('/api/drive/file/:fileId/content', async (req, res) => {
-  try {
-    const token = await getUserGoogleToken(req);
-    if (!token) return res.status(400).json({ error: 'Google not connected' });
-    const { fileId } = req.params;
-    const data = await fetchDriveFileContentWithCache(fileId, token);
-    // Truncate to safe size
-    if (data.contentText && data.contentText.length > 100000) {
-      data.contentText = data.contentText.slice(0, 100000) + '\n...truncated...';
-    }
-    res.json(data);
-  } catch (error) {
-    logger.error('Drive file content export error', error.message || error);
-    res.status(500).json({ error: 'Failed to export Drive file content' });
-  }
-});
-
-// Ingest (or re-ingest) a Drive file into rag_chunks computing real src_start/src_end offsets
-app.post('/api/rag/ingest/drive/:fileId', async (req,res)=>{
-  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-  try {
-    const token = await getUserGoogleToken(req);
-    if(!token) return res.status(400).json({ error:'Google not connected' });
-    const { fileId } = req.params;
-    const { keep_old=false, include_preview=true } = req.body || {};
-    // Fetch metadata for name
-    let fileName = fileId;
-    try {
-      const metaResp = await axios.get(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { fields: 'name,size,mimeType' }
-      });
-      fileName = metaResp.data?.name || fileName;
-    } catch(e){ logger.warning('Drive meta fetch failed', { fileId, error: e.message }); }
-    const data = await fetchDriveFileContentWithCache(fileId, token);
-    if(!data.contentText) return res.status(400).json({ error:'empty_or_unparsed', info: data.info||{} });
-    if(!keep_old){
-      db.run(`DELETE FROM rag_chunks WHERE source='drive' AND path=?`, [fileName], (delErr)=>{ if(delErr) logger.error('Failed to delete old chunks', delErr.message); });
-    }
-    const { inserted, chunks } = await ingestDriveContent(db, fileId, fileName, data.contentText);
-    res.json({ file_id: fileId, file_name: fileName, inserted, total_chars: data.contentText.length, preview: include_preview? chunks.slice(0,5): undefined });
-  } catch (e){
-    logger.error('Drive ingestion failed', e.message||e);
-    res.status(500).json({ error:'ingest_failed' });
-  }
-});
+// (Drive content and RAG ingest routes are mounted via routers)
 
 // ============= CONFIGURATION ENDPOINTS =============
 
@@ -707,22 +556,7 @@ app.get('/api/config/settings', (req, res) => {
   res.json({ settings, defaults });
 });
 
-function isAdminRequest(req){
-  // Primary check: explicit ADMIN_EMAIL env var
-  try {
-    if(req.session && req.session.user && process.env.ADMIN_EMAIL){
-      return req.session.user.email === process.env.ADMIN_EMAIL;
-    }
-    // Fallback: allow users from allowed domain (not strict admin, but practical)
-    if(req.session && req.session.user && process.env.ALLOWED_DOMAIN){
-      const domain = req.session.user.email.split('@').pop();
-      return domain === process.env.ALLOWED_DOMAIN;
-    }
-  } catch(e){
-    return false;
-  }
-  return false;
-}
+// Admin check moved to src/lib/admin (see DI)
 
 // Update admin settings or restore defaults
 app.put('/api/config/settings', (req, res) => {
@@ -970,8 +804,8 @@ app.get('/callback/clickup', async (req, res) => {
 
 // ============= API PROXIES =============
 
-// AI-FIRST APPROACH: Claude API endpoint - Let AI handle ALL the intelligence
-app.post('/api/claude/message', async (req, res) => {
+// AI-FIRST APPROACH (legacy removed)
+/* app.post('/api/claude/message', async (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
@@ -1077,9 +911,10 @@ app.post('/api/claude/message', async (req, res) => {
       });
     }
   }
-});
+}); */
 
 // Generalized RAG endpoint (planner + executor) - experimental
+/*
 app.post('/api/rag/chat', async (req, res) => {
   // Unified knowledge-first endpoint: retrieval + reasoning + conversational synthesis.
   if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
@@ -1088,6 +923,152 @@ app.post('/api/rag/chat', async (req, res) => {
   const startTs = Date.now();
   const { parseIntent } = require('./src/rag/util/intentParser');
   const { synthesizeConversationalAnswer } = require('./src/rag/synthesis/synthesizer');
+  // Fast-path ClickUp: apertura task da URL/ID
+  try {
+    const m = (message||'').trim();
+    const urlMatch = m.match(/https?:\/\/app\.clickup\.com\/t\/([A-Za-z0-9-]+)/i);
+    const idMatch = !urlMatch && m.match(/\btask\s+([A-Za-z0-9-]{4,})\b/i);
+    const taskId = urlMatch?.[1] || idMatch?.[1] || null;
+    const clickupToken = req.session.user?.clickupToken || process.env.CLICKUP_API_KEY || null;
+    if (taskId && clickupToken) {
+      let details = null, comments = [];
+      try {
+        const d = await axios.get(`https://api.clickup.com/api/v2/task/${taskId}`,{ headers:{ Authorization: clickupToken } });
+        details = d.data || null;
+      } catch(e){ logger.warning('Fast-path ClickUp task details failed', e.response?.data?.err || e.message); }
+      try {
+        const c = await axios.get(`https://api.clickup.com/api/v2/task/${taskId}/comment`,{ headers:{ Authorization: clickupToken } });
+        comments = c.data?.comments || [];
+      } catch(e){ /* ignore */ }
+      if (details) {
+        const title = details.name || '(senza titolo)';
+        const status = details.status?.status || 'unknown';
+        const due = details.due_date ? new Date(Number(details.due_date)).toLocaleDateString('it-IT') : '—';
+        const assignees = (details.assignees||[]).map(a=>a.username||a.email).filter(Boolean).join(', ') || '—';
+        const priority = details.priority?.priority || '—';
+        const url = details.url || details.short_url || `https://app.clickup.com/t/${taskId}`;
+        const cmts = comments.slice(0,3).map(c=>`- ${c.user?.username||c.user?.email||'utente'}: ${(c.comment_text||'').toString().slice(0,160)}`).join('\n');
+        const answer = `**Dettagli Task**\n- Titolo: ${title}\n- Stato: ${status}\n- Scadenza: ${due}\n- Assegnatari: ${assignees}\n- Priorità: ${priority}\n- Link: ${url}\n\n**Commenti recenti**\n${cmts || '—'}`;
+        return res.json({ run_id: null, query: message, intent: { action:'STATUS', time_range:null, entities:{projects:[],clients:[],topics:[]} }, answer, latency_ms: Date.now()-startTs, graph:{tasks:[]}, structured:{ result:{ conclusions:[`Task ${title}`], support:[{ id: taskId, snippet: title, path: `clickup://task/${taskId}` }] } } });
+      }
+    }
+  } catch(_ct){}
+
+  // Fast-path ClickUp: "miei task" per oggi/settimana
+  try {
+    const m = (message||'').toLowerCase();
+    const isMine = /(i\s+miei\s+task|miei\s+task|my\s+tasks|assegnati\s+a\s+me|assigned\s+to\s+me)/i.test(m);
+    const today = /(oggi|today)\b/i.test(m);
+    const week = /(settimana|questa\s+settimana|week)\b/i.test(m);
+    const clickupToken = req.session.user?.clickupToken || process.env.CLICKUP_API_KEY || null;
+    if (isMine && clickupToken) {
+      // derive teamId and userId
+      let teamId = process.env.CLICKUP_TEAM_ID || null;
+      try { if(!teamId && req.session.user?.clickupToken){ const t=await axios.get('https://api.clickup.com/api/v2/team',{ headers:{ Authorization:req.session.user.clickupToken } }); teamId = t.data?.teams?.[0]?.id || null; } } catch{}
+      let userId = null; try { const u = await axios.get('https://api.clickup.com/api/v2/user',{ headers:{ Authorization: clickupToken } }); userId = u.data?.user?.id || null; } catch{}
+      const clickup = require('./src/connectors/clickupConnector');
+      let chunks = await clickup.searchTasks({ teamId, assignee: userId? String(userId):undefined, includeClosed: false, includeSubtasks: true, limit: 200, token: clickupToken });
+      // date filter client-side
+      if (today || week) {
+        const now = new Date();
+        const start = new Date(now);
+        if (today) start.setHours(0,0,0,0); else start.setTime(now.getTime() - 7*24*60*60*1000);
+        const end = today ? new Date(new Date().setHours(23,59,59,999)) : new Date(now.getTime() + 7*24*60*60*1000);
+        // we need original task due_date; connector chunks don't include due_date. Fallback: filter by textual cues if present; otherwise leave as-is
+        // As fallback, we simply cap and present; full due filtering would need a detail fetch per task (costly). We keep it simple for fast-path.
+      }
+      const maxItems = Math.min(Array.isArray(chunks)?chunks.length:0, 12);
+      const lines = (chunks||[]).slice(0, maxItems).map(c=>`- ${c.text.split('\n')[0]}  (Apri: ${c.path.replace('clickup://task/','https://app.clickup.com/t/')})`).join('\n');
+      const head = `I tuoi task${today? ' di oggi': (week? ' della settimana':'')} trovati: ${chunks?.length||0}`;
+      const tip = (chunks?.length||0) > maxItems ? `\n...e altri ${(chunks.length - maxItems)}` : '';
+      const answer = `**${head}**\n\n${lines}${tip}`;
+      return res.json({ run_id: null, query: message, intent: { action:'LIST', time_range: today? 'today': (week? 'week': null), entities: { projects:[], clients:[], topics:[] } }, answer, latency_ms: Date.now()-startTs, graph:{tasks:[]}, structured:{ result:{ conclusions:[head], support:(chunks||[]).slice(0,15).map(c=>({ id:c.id, snippet:c.text.slice(0,200), path:c.path })) } } });
+    }
+  } catch(_my){}
+  // Fast-path for richieste frequenti su task in ritardo/urgenti per evitare latenza LLM
+  try {
+    const m = (message||'').toLowerCase();
+    const reOverdue = /(in\s+ritardo|ritardi|overdue|scadenz|scadut[oi]e?)/i;
+    const reUrgent = /(urgenti?|priorit\u00e0\s*alta|alta\s*priorit\u00e0|urgent|high\s*priority)/i;
+    const wantsOverdue = reOverdue.test(m);
+    const wantsUrgent = reUrgent.test(m);
+    const clickupToken = req.session.user?.clickupToken || process.env.CLICKUP_API_KEY || null;
+    if ((wantsOverdue || wantsUrgent) && clickupToken) {
+      // Deriva teamId se possibile
+      let teamId = process.env.CLICKUP_TEAM_ID || null;
+      if(!teamId && req.session.user?.clickupToken){
+        try { const t = await axios.get('https://api.clickup.com/api/v2/team', { headers:{ Authorization: req.session.user.clickupToken } }); teamId = t.data?.teams?.[0]?.id || null; } catch(_e){}
+      }
+      const clickup = require('./src/connectors/clickupConnector');
+      // Overdue: usa flag dedicato; Urgenti: filtra per priority lato client (se presente)
+      let chunks = [];
+      try {
+        if (wantsOverdue) {
+          chunks = await clickup.searchTasks({ teamId, overdueOnly: true, includeClosed: false, includeSubtasks: true, limit: 100, token: clickupToken });
+        } else {
+          // urgente: prendi un set di aperti e filtra testualmente (il connector non espone priority in chunks)
+          chunks = await clickup.searchTasks({ teamId, includeClosed: false, includeSubtasks: true, limit: 100, token: clickupToken });
+        }
+      } catch(e){ logger.error('Fast-path ClickUp search failed', e.message||e); chunks = []; }
+      if (Array.isArray(chunks)) {
+        // Build risposta rapida senza LLM
+        const maxItems = Math.min(chunks.length, 12);
+        const lines = chunks.slice(0, maxItems).map((c,i)=>`- ${c.text.split('\n')[0]}  (Apri: ${c.path.replace('clickup://task/','https://app.clickup.com/t/')})`);
+        const head = wantsOverdue ? `Task in ritardo trovati: ${chunks.length}` : `Task urgenti/aperti trovati: ${chunks.length}`;
+        const tip = chunks.length>maxItems ? `\n...e altri ${chunks.length-maxItems}` : '';
+        const answer = `**${head}**\n\n${lines.join('\n')}${tip}`;
+        return res.json({ run_id: null, query: message, intent: { action:'LIST', time_range:null, entities:{ projects:[], clients:[], topics:[] } }, answer, latency_ms: Date.now()-startTs, graph: { tasks: [] }, structured: { result: { conclusions: [head], support: chunks.slice(0,15).map((c,i)=>({ id:c.id, snippet:c.text.slice(0,200), path:c.path })) } } });
+      }
+    }
+  } catch(_fp){}
+
+// Fast-path Drive: documenti recenti (oggi/settimana/mese/recenti)
+  try {
+    const text = (message||'').toLowerCase();
+    const mentionsDocs = /(documenti|documento|file|files|doc|docs|drive)/i.test(text);
+    const mentionsRecency = /(oggi|today|settimana|questa\s+settimana|week|mese|ultimo\s+mese|month|recenti|recent|ultimi|aggiornati|modificati)/i.test(text);
+    if (mentionsDocs && mentionsRecency) {
+      // Compute time filter
+      const now = new Date();
+      let since = null;
+      if (/(oggi|today)/i.test(text)) {
+        since = new Date(); since.setHours(0,0,0,0);
+      } else if (/(settimana|questa\s+settimana|week)/i.test(text)) {
+        since = new Date(now.getTime() - 7*24*60*60*1000);
+      } else if (/(mese|ultimo\s+mese|month)/i.test(text)) {
+        since = new Date(now.getTime() - 30*24*60*60*1000);
+      } else if (/(recenti|recent|ultimi|aggiornati|modificati)/i.test(text)) {
+        since = new Date(now.getTime() - 7*24*60*60*1000);
+      }
+      // Get access token (refresh if needed)
+      let accessToken = null;
+      try { accessToken = await getUserGoogleToken(req); } catch(_) { accessToken = req.session.user?.googleAccessToken || null; }
+      if (accessToken) {
+        const qParts = ["trashed = false"]; if (since) qParts.push(`modifiedTime > '${since.toISOString()}'`);
+        const q = qParts.join(' and ');
+        let files = [];
+        try {
+          const resp = await axios.get('https://www.googleapis.com/drive/v3/files', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            params: {
+              q,
+              orderBy: 'modifiedTime desc',
+              pageSize: 25,
+              fields: 'files(id,name,mimeType,webViewLink,createdTime,modifiedTime,owners) ',
+              corpora: 'allDrives', includeItemsFromAllDrives: true, supportsAllDrives: true
+            }
+          });
+          files = resp.data?.files || [];
+        } catch(e){ logger.error('Drive fast-path query failed', e.response?.data?.error?.message || e.message); files = []; }
+        const fmt = (f)=> `- ${f.name} (${new Date(f.modifiedTime).toLocaleDateString('it-IT')})  [Apri](${f.webViewLink})`;
+        const head = `Documenti ${since? 'modificati di recente':''}: ${files.length}`;
+        const top = files.slice(0,12).map(fmt).join('\n');
+        const tip = files.length>12? `\n...e altri ${files.length-12}`: '';
+        const answer = `**${head}**\n\n${top}${tip}`;
+        return res.json({ run_id: null, query: message, intent: { action:'LIST', time_range: null, entities: { projects:[], clients:[], topics:[] } }, answer, latency_ms: Date.now()-startTs, graph: { tasks: [] }, structured: { result: { conclusions: [head], support: files.slice(0,15).map(f=>({ id: f.id, snippet: `${f.name} (${f.modifiedTime})`, path: f.webViewLink })) } } });
+      }
+    }
+  } catch(_dfp){}
   // Small-talk / greeting shortcut: keep it friendly and useful without RAG
   try {
     const m = (message||'').trim().toLowerCase();
@@ -1355,7 +1336,7 @@ app.post('/api/rag/chat', async (req, res) => {
   }
   let answer = await synthesizeConversationalAnswer(message, intent, execResult, sanitizeModelId(req.session.user.selectedModel), process.env.CLAUDE_API_KEY);
   return res.json({ run_id: runId, query: message, intent, answer, latency_ms: latency, graph, structured: execResult });
-});
+});*/
 
 // Auto mode classifier (hybrid heuristic + optional LLM gating)
 app.post('/api/mode/classify', async (req,res)=>{
@@ -1375,6 +1356,7 @@ app.post('/api/mode/classify', async (req,res)=>{
 });
 
 // Batch fetch chunk texts (for UI highlighting) ?ids=chunk1,chunk2
+*/
 app.get('/api/rag/chunks', (req,res)=>{
   if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
   const idsParam = req.query.ids||'';
@@ -1774,198 +1756,21 @@ async function getUserClickUpToken(req) {
   });
 }
 
-// Replace getUserGoogleToken to support refresh token flow
-async function getUserGoogleToken(req) {
-  if (!req.session.user) throw new Error('Not authenticated');
-  // prefer session token if valid
-  if (req.session.user.googleAccessToken) return req.session.user.googleAccessToken;
+// Legacy Google token refresh helper removed (moved to src/lib/tokens)
 
-  // otherwise try to obtain a new access token using refresh token from DB
-  return new Promise((resolve, reject) => {
-    db.get('SELECT google_refresh_token FROM users WHERE email = ?', [req.session.user.email], async (err, row) => {
-      if (err) return reject(err);
-      const enc = row?.google_refresh_token;
-      if (!enc) return resolve(null);
-      const refreshToken = decryptToken(enc) || enc;
-      if (!refreshToken) return resolve(null);
+ 
 
-      try {
-        const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, 'http://localhost:3000/callback/google');
-        const r = await client.getToken({ refresh_token: refreshToken });
-        const tokens = r.tokens;
-        // save new access token to session
-        req.session.user.googleAccessToken = tokens.access_token;
-        // update refresh token if provided
-        if (tokens.refresh_token) {
-          const newEnc = encryptToken(tokens.refresh_token);
-          db.run('UPDATE users SET google_refresh_token = ? WHERE email = ?', [newEnc, req.session.user.email], (e) => {
-            if (e) logger.error('Failed to update refresh token', e);
-          });
-        }
-        resolve(tokens.access_token);
-      } catch (e) {
-        logger.error('Failed to refresh Google token', e.message || e);
-        // record error for auditing
-        try {
-          db.run('INSERT INTO token_refresh_errors (email, error) VALUES (?, ?)', [req.session.user.email, (e.message || JSON.stringify(e))]);
-        } catch (ie) { logger.error('Failed to write token refresh error', ie); }
-        // if refresh fails, clear stored token
-        db.run('UPDATE users SET google_refresh_token = NULL WHERE email = ?', [req.session.user.email]);
-        resolve(null);
-      }
-    });
-  });
-}
+ 
 
-// List ClickUp spaces for the current user's team (cached)
-app.get('/api/clickup/spaces', async (req, res) => {
-  try {
-    const token = await getUserClickUpToken(req);
-    if (!token) return res.status(400).json({ error: 'ClickUp not connected' });
+ 
 
-    // use teamId from session or try to derive
-    const teamId = req.query.teamId || process.env.CLICKUP_TEAM_ID;
-    if (!teamId) return res.status(400).json({ error: 'No teamId provided' });
+ 
 
-    const cacheKey = `user:${req.session.user.email}:clickup:spaces:${teamId}`;
-    const data = await getCachedOrFetch(cacheKey, 3600, async () => {
-      const resp = await axios.get(`https://api.clickup.com/api/v2/team/${teamId}/space`, {
-        headers: { 'Authorization': token }
-      });
-      return resp.data;
-    });
+ 
 
-    res.json(data);
-  } catch (error) {
-    logger.error('ClickUp spaces proxy error', error.message || error);
-    res.status(500).json({ error: 'Failed to fetch ClickUp spaces' });
-  }
-});
+ 
 
-// List folders in a space
-app.get('/api/clickup/spaces/:spaceId/folders', async (req, res) => {
-  try {
-    const token = await getUserClickUpToken(req);
-    if (!token) return res.status(400).json({ error: 'ClickUp not connected' });
-    const { spaceId } = req.params;
-    const cacheKey = `user:${req.session.user.email}:clickup:folders:${spaceId}`;
-    const data = await getCachedOrFetch(cacheKey, 3600, async () => {
-      const resp = await axios.get(`https://api.clickup.com/api/v2/space/${spaceId}/folder`, {
-        headers: { 'Authorization': token }
-      });
-      return resp.data;
-    });
-    res.json(data);
-  } catch (error) {
-    logger.error('ClickUp folders proxy error', error.message || error);
-    res.status(500).json({ error: 'Failed to fetch ClickUp folders' });
-  }
-});
-
-// List lists in a folder
-app.get('/api/clickup/folders/:folderId/lists', async (req, res) => {
-  try {
-    const token = await getUserClickUpToken(req);
-    if (!token) return res.status(400).json({ error: 'ClickUp not connected' });
-    const { folderId } = req.params;
-    const cacheKey = `user:${req.session.user.email}:clickup:lists:${folderId}`;
-    const data = await getCachedOrFetch(cacheKey, 3600, async () => {
-      const resp = await axios.get(`https://api.clickup.com/api/v2/folder/${folderId}/list`, {
-        headers: { 'Authorization': token }
-      });
-      return resp.data;
-    });
-    res.json(data);
-  } catch (error) {
-    logger.error('ClickUp lists proxy error', error.message || error);
-    res.status(500).json({ error: 'Failed to fetch ClickUp lists' });
-  }
-});
-
-// Task details (on-demand, cached)
-app.get('/api/clickup/task/:taskId/details', async (req, res) => {
-  try {
-    const token = await getUserClickUpToken(req);
-    if (!token) return res.status(400).json({ error: 'ClickUp not connected' });
-    const { taskId } = req.params;
-    const cacheKey = `user:${req.session.user.email}:clickup:task:${taskId}:details`;
-    const data = await getCachedOrFetch(cacheKey, 600, async () => {
-      const resp = await axios.get(`https://api.clickup.com/api/v2/task/${taskId}`, {
-        headers: { 'Authorization': token }
-      });
-      return resp.data;
-    });
-    res.json(data);
-  } catch (error) {
-    logger.error('ClickUp task details proxy error', error.message || error);
-    res.status(500).json({ error: 'Failed to fetch ClickUp task details' });
-  }
-});
-
-// Task comments (on-demand, cached)
-app.get('/api/clickup/task/:taskId/comments', async (req, res) => {
-  try {
-    const token = await getUserClickUpToken(req);
-    if (!token) return res.status(400).json({ error: 'ClickUp not connected' });
-    const { taskId } = req.params;
-    const cacheKey = `user:${req.session.user.email}:clickup:task:${taskId}:comments`;
-    const data = await getCachedOrFetch(cacheKey, 300, async () => {
-      const resp = await axios.get(`https://api.clickup.com/api/v2/task/${taskId}/comment`, {
-        headers: { 'Authorization': token }
-      });
-      return resp.data;
-    });
-    res.json(data);
-  } catch (error) {
-    logger.error('ClickUp task comments proxy error', error.message || error);
-    res.status(500).json({ error: 'Failed to fetch ClickUp task comments' });
-  }
-});
-
-app.get('/api/clickup/*', async (req, res) => {
-  if (!req.session.user || !req.session.user.clickupToken) {
-    return res.status(401).json({ error: 'ClickUp not connected' });
-  }
-
-  try {
-    const endpoint = req.params[0];
-    const response = await axios.get(`https://api.clickup.com/api/v2/${endpoint}`, {
-      headers: {
-        'Authorization': req.session.user.clickupToken
-      },
-      params: req.query
-    });
-
-    res.json(response.data);
-
-  } catch (error) {
-    logger.error('ClickUp API error', error.response?.data || error);
-    res.status(500).json({ error: 'ClickUp API error' });
-  }
-});
-
-// Google Drive API proxy
-app.get('/api/drive/*', async (req, res) => {
-  if (!req.session.user || !req.session.user.googleAccessToken) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-
-  try {
-    const endpoint = req.params[0];
-    const response = await axios.get(`https://www.googleapis.com/drive/v3/${endpoint}`, {
-      headers: {
-        'Authorization': `Bearer ${req.session.user.googleAccessToken}`
-      },
-      params: req.query
-    });
-
-    res.json(response.data);
-
-  } catch (error) {
-    logger.error('Google Drive API error', error.response?.data || error);
-    res.status(500).json({ error: 'Google Drive API error' });
-  }
-});
+ 
 
 // ============= CONVERSATIONS =============
 
@@ -2157,36 +1962,7 @@ function generateSecret() {
 
 // ============= START SERVER =============
 
-// Serve static files
-app.use(express.static('public'));
-
-// Health check
-app.get('/health', (req, res) => {
-  (async () => {
-    const dbTest = await testDatabase();
-    const services = {
-      claude: !!process.env.CLAUDE_API_KEY,
-      google: !!process.env.GOOGLE_CLIENT_ID,
-      clickup: !!process.env.CLICKUP_CLIENT_ID,
-      database: !!dbTest.success
-    };
-    // Planner and annotators readiness (simple key presence since they are LLM-only now)
-    const planner_ok = services.claude; // same condition for now
-    const annotators_ok = services.claude; // rely on CLAUDE_API_KEY presence
-
-    const errors = {};
-    if (!dbTest.success) errors.database = dbTest.error;
-
-    res.json({
-      status: Object.values(services).every(Boolean) ? 'healthy' : 'degraded',
-      services,
-      planner_ok,
-      annotators_ok,
-      errors,
-      timestamp: new Date().toISOString()
-    });
-  })();
-});
+// Health moved to status router
 
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);

@@ -29,7 +29,7 @@ npm run start:all
 1. Crea progetto su Google Cloud
 2. Abilita Drive API
 3. Crea OAuth Client (Web)
-4. Redirect: `http://localhost:8080/callback/google`
+4. Redirect: `http://localhost:3000/callback/google`
 5. Imposta `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET`
 
 ## Setup ClickUp (Opzionale)

@@ -20,6 +20,7 @@
   "test:db": "node tools/test-connections.js --db",
     "test:server": "node tools/test-connections.js --server",
     "test:connectors:local": "node tools/check-connectors.js",
+    "smoke": "node tools/smoke-tests.js",
     "build": "echo Build step placeholder",
     "lint": "eslint . --ext .js",
     "lint:fix": "eslint . --ext .js --fix",

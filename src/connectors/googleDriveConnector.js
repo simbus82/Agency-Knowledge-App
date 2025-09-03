@@ -79,7 +79,7 @@ async function searchFiles({ query, accessToken, driveId, pageSize = 50 } = {}) 
  * Cerca file in una o più cartelle (My Drive o Drive Condivisi).
  * @param {{ folderIds: string[], query?: string, driveId?: string }} params
  */
-async function searchInFolders({ folderIds = [], query = '', driveId = undefined } = {}){
+async function searchInFolders_legacy({ folderIds = [], query = '', driveId = undefined } = {}){
     const client = getDriveClient();
     if (!client) return [];
     if (!Array.isArray(folderIds) || folderIds.length === 0) return [];
@@ -109,7 +109,7 @@ async function searchInFolders({ folderIds = [], query = '', driveId = undefined
  * @param {string} mimeType - Il tipo MIME del file (opzionale).
  * @returns {Promise<string|null>} - Il contenuto del file come testo.
  */
-async function getFileContent(fileId, mimeType) {
+async function getFileContent_legacy(fileId, mimeType) {
     const client = getDriveClient();
     if (!client) return null;
     try {
@@ -153,8 +153,8 @@ function textToChunks(text, meta={}){
  * Estrae il contenuto come array di chunks annotabili
  * @param {{ fileId: string, mimeType?: string, fileName?: string }} params
  */
-async function getFileChunks({ fileId, mimeType, fileName }){
-    const content = await getFileContent(fileId, mimeType);
+async function getFileChunks_legacy({ fileId, mimeType, fileName }){
+    const content = await getFileContent_legacy(fileId, mimeType);
     if(!content) return [];
     return textToChunks(content, { fileId, fileName });
 }

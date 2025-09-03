@@ -48,3 +48,38 @@ ALERT_THRESHOLD_REFRESH_ERRORS=5
 - Per Drive con Service Account: aggiungi il service account come membro delle Shared Drives necessarie oppure abilita la delega a livello di dominio e imposta `GOOGLE_IMPERSONATED_USER_EMAIL` a un utente Workspace con accesso ai file/cartelle da interrogare.
 - Backup sicuro di `.env.example`
 
+## Modelli Claude (RAG)
+```
+SELECTED_CLAUDE_MODEL=claude-sonnet-4-20250514
+CLAUDE_RAG_PLANNER_MODEL=claude-sonnet-4-20250514
+CLAUDE_RAG_ANNOTATOR_MODEL=claude-sonnet-4-20250514
+CLAUDE_RAG_REASONER_MODEL=claude-sonnet-4-20250514
+CLAUDE_RAG_UTILITY_MODEL=claude-sonnet-4-20250514
+```
+
+## ClickUp Team predefinito (opzionale)
+```
+CLICKUP_TEAM_ID=
+```
+
+## Embeddings (retrieve/lexicon)
+```
+OPENAI_API_KEY=
+EMBEDDING_MODEL=text-embedding-3-small
+```
+
+## Proxy
+```
+# HTTPS_PROXY=http://proxy.local:8080
+# HTTP_PROXY=http://proxy.local:8080
+```
+
+## Note su Drive via OAuth utente
+- Se l’utente fa login con Google OAuth, il server usa il token utente per interrogare Drive (fast‑path “documenti recenti/cerca in Drive”).
+- In assenza di `GOOGLE_CREDENTIALS_JSON`, le funzioni base del connettore Drive funzionano comunque via token utente.
+
+## Fast‑Path (bassa latenza)
+- ClickUp: task in ritardo/urgenti, “i miei task” oggi/settimana, dettaglio da URL/ID.
+- Drive: documenti recenti (oggi/settimana/mese/recenti).
+- Queste risposte non usano LLM e riducono i timeouts.
+
