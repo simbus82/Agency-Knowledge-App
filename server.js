@@ -9,6 +9,8 @@ const path = require('path');
 const fs = require('fs');
 // Removed legacy binary parsers (handled by Drive export)
 require('dotenv').config();
+// Centralized logger
+const logger = require('./src/lib/logger');
 
 // Hard requirement: application must not run without LLM key
 if(!process.env.CLAUDE_API_KEY){
@@ -45,13 +47,12 @@ app.use(session({
   }
 }));
 
-// Routers
-const statusRouter = require('./src/routes/status')({ APP_VERSION, claudePing, testDatabase });
-app.use(statusRouter);
+// Initialize SQLite database early for DI
+const db = new sqlite3.Database('./data/knowledge_hub.db');
 
-// Lib helpers (DI closures)
+// Lib helpers (DI closures) - require after db/logger available
 const { getCachedOrFetch: _getCachedOrFetch } = require('./src/lib/cache');
-const { getUserClickUpToken: _getUserClickUpToken, getUserGoogleToken: _getUserGoogleToken } = require('./src/lib/tokens');
+const { getUserClickUpToken: _getUserClickUpToken, getUserGoogleToken: _getUserGoogleToken, encryptToken } = require('./src/lib/tokens');
 const { isAdminRequest: _isAdminRequest } = require('./src/lib/admin');
 const { fetchDriveFileContentWithCacheFactory } = require('./src/lib/drive');
 const getUserClickUpToken = (req)=> _getUserClickUpToken(db, req);
@@ -60,7 +61,12 @@ const getCachedOrFetch = (key, ttl, fn)=> _getCachedOrFetch(db, 'clickup_cache',
 const fetchDriveFileContentWithCache = fetchDriveFileContentWithCacheFactory({ db, axios, logger });
 const isAdminRequest = _isAdminRequest;
 
-// Mount RAG / ClickUp / Drive routers (dependency-injected)
+// Routers (mount after DI is ready)
+const statusRouter = require('./src/routes/status')({ APP_VERSION, claudePing, testDatabase, db });
+app.use(statusRouter);
+
+// (config router mounted after model definitions below)
+
 const ragRouter = require('./src/routes/rag')({
   db,
   logger,
@@ -84,8 +90,9 @@ app.use(clickupRouter);
 const driveRouter = require('./src/routes/drive')({ axios, logger, getUserGoogleToken, fetchDriveFileContentWithCache });
 app.use(driveRouter);
 
-// Initialize SQLite database for config and conversations
-const db = new sqlite3.Database('./data/knowledge_hub.db');
+// Conversations router
+const conversationsRouter = require('./src/routes/conversations')({ db, logger });
+app.use(conversationsRouter);
 
 // Create tables if not exist
 db.serialize(() => {
@@ -259,149 +266,16 @@ db.serialize(() => {
   )`);
 });
 
-// Logger centralizzato
-const logger = require('./src/lib/logger');
-
 // Legacy helpers removed: encryption, cache (moved to src/lib)
 
 // Legacy token helper removed (moved to src/lib/tokens)
-
-// Fetch (and cache) exported text content for Google-native files
-async function fetchDriveFileContentWithCache(fileId, accessToken) {
-  const cacheKey = `user:drive:file:${fileId}`;
-  return getCachedOrFetch(cacheKey, 600, async () => {
-    // First, get metadata (size, mimeType, name) to enforce size limits
-    let meta = {};
-    try {
-      const metaResp = await axios.get(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        params: { fields: 'mimeType, name, size' }
-      });
-      meta = metaResp.data || {};
-    } catch (me) {
-      meta = {};
-    }
-
-    const size = parseInt(meta.size || '0', 10) || 0;
-    if (size > DRIVE_MAX_BYTES) {
-      return { contentText: null, info: { error: 'file_too_large', size } };
-    }
-
-    // Try to export as plain text for Google-native files
-    try {
-      const resp = await axios.get(`https://www.googleapis.com/drive/v3/files/${fileId}/export`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        params: { mimeType: 'text/plain' },
-        responseType: 'text'
-      });
-      return { contentText: resp.data };
-    } catch (e) {
-      // Fallback: download file binary and try to parse based on mimeType
-      const resp2 = await axios.get(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        params: { alt: 'media' },
-        responseType: 'arraybuffer'
-      });
-      const buffer = Buffer.from(resp2.data);
-
-      const mime = meta.mimeType || '';
-
-      // PDF
-      if (mime === 'application/pdf' || buffer.slice(0,4).toString('hex') === '25504446') {
-        try {
-          const data = await pdfParse(buffer);
-          return { contentText: data.text };
-        } catch (pe) {
-          return { contentText: null, info: { parsed: false } };
-        }
-      }
-
-      // DOCX (Office Open XML) - parse using mammoth or unzip + xml
-      if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || meta.name?.endsWith('.docx')) {
-        try {
-          const result = await mammoth.extractRawText({ buffer });
-          return { contentText: result.value };
-        } catch (me) {
-          // try unzip + xml parsing fallback
-          try {
-            const entries = await unzipper.Open.buffer(buffer);
-            const doc = entries.files.find(f => f.path === 'word/document.xml');
-            if (doc) {
-              const content = await doc.buffer();
-              const xml = content.toString('utf8');
-              const parsed = await xml2js.parseStringPromise(xml);
-              // Extract text nodes
-              let text = '';
-              const extractText = (node) => {
-                if (typeof node === 'string') text += node + ' ';
-                if (Array.isArray(node)) node.forEach(extractText);
-                if (typeof node === 'object') Object.values(node).forEach(extractText);
-              };
-              extractText(parsed);
-              return { contentText: text };
-            }
-          } catch (ue) {
-            return { contentText: null, info: { parsed: false } };
-          }
-        }
-      }
-
-      // XLSX - try to read cells as CSV-ish
-      if (mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || meta.name?.endsWith('.xlsx')) {
-        try {
-          const workbook = new ExcelJS.Workbook();
-          await workbook.xlsx.load(buffer);
-          let csv = '';
-          workbook.eachSheet((sheet) => {
-            csv += `Sheet: ${sheet.name}\n`;
-            sheet.eachRow((row) => {
-              csv += row.values.slice(1).join('\t') + '\n';
-            });
-            csv += '\n';
-          });
-          return { contentText: csv };
-        } catch (xe) {
-          return { contentText: null, info: { parsed: false } };
-        }
-      }
-
-      // PPTX - extract text from slides (basic)
-      if (mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' || meta.name?.endsWith('.pptx')) {
-        try {
-          const entries = await unzipper.Open.buffer(buffer);
-          const texts = [];
-          for (const f of entries.files) {
-            if (f.path.startsWith('ppt/slides/slide') && f.path.endsWith('.xml')) {
-              const b = await f.buffer();
-              const xml = b.toString('utf8');
-              const parsed = await xml2js.parseStringPromise(xml);
-              const extractText = (node) => {
-                let out = '';
-                if (typeof node === 'string') out += node + ' ';
-                if (Array.isArray(node)) node.forEach(n => out += extractText(n));
-                if (typeof node === 'object') Object.values(node).forEach(n => out += extractText(n));
-                return out;
-              };
-              texts.push(extractText(parsed));
-            }
-          }
-          return { contentText: texts.join('\n---\n') };
-        } catch (pe) {
-          return { contentText: null, info: { parsed: false } };
-        }
-      }
-
-      // Unknown binary - return size info
-      return { contentText: null, info: { size: buffer.length } };
-    }
-  });
-}
 
 // (Drive content and RAG ingest routes are mounted via routers)
 
 // ============= CONFIGURATION ENDPOINTS =============
 
 // Check initial configuration status
+/* moved to src/routes/config.js
 app.get('/api/config/status', (req, res) => {
   const requiredConfigs = [
     'CLAUDE_API_KEY',
@@ -431,9 +305,10 @@ app.get('/api/config/status', (req, res) => {
     missingRequired: missingConfigs,
     status: configStatus
   });
-});
+});*/
 
 // Get configuration overview (safe version for settings page)
+/* moved to src/routes/config.js
 app.get('/api/config/overview', (req, res) => {
   res.json({
     claude: !!process.env.CLAUDE_API_KEY,
@@ -442,9 +317,10 @@ app.get('/api/config/overview', (req, res) => {
     clickupApiKey: !!process.env.CLICKUP_API_KEY,
     allowedDomain: process.env.ALLOWED_DOMAIN || '56k.agency'
   });
-});
+});*/
 
 // Save configuration (secure - only saves to database, not env)
+/* moved to src/routes/config.js
 app.post('/api/config/save', async (req, res) => {
   try {
     const { config } = req.body;
@@ -507,7 +383,7 @@ app.post('/api/config/save', async (req, res) => {
     logger.error('Failed to save configuration', error);
     res.status(500).json({ error: 'Failed to save configuration' });
   }
-});
+});*/
 
 // Get available Claude models
 const AVAILABLE_MODELS = [
@@ -526,16 +402,26 @@ function sanitizeModelId(id){
   if(AVAILABLE_MODELS.some(m=>m.id===mapped)) return mapped;
   return AVAILABLE_MODELS.find(m=>m.recommended)?.id || AVAILABLE_MODELS[0].id;
 }
-app.get('/api/claude/models', (req,res)=> res.json(AVAILABLE_MODELS));
-app.get('/api/claude/models/status', (req,res)=>{
-  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-  const raw = req.session.user.selectedModel;
-  const active = sanitizeModelId(raw);
-  const exists = AVAILABLE_MODELS.some(m=>m.id===active);
-  res.json({ active_model: active, exists, legacy_original: raw!==active? raw: null });
+// models endpoints moved to src/routes/config.js
+
+// Mount config router after models are defined
+const configRouter = require('./src/routes/config')({
+  db,
+  logger,
+  axios,
+  AVAILABLE_MODELS,
+  sanitizeModelId,
+  testClaudeAPI,
+  testClickUpAPI,
+  testClickUpToken,
+  testDatabase,
+  generateSecret,
+  isAdminRequest,
 });
+app.use(configRouter);
 
 // Get and update admin-visible settings (safe, non-sensitive)
+/* moved to src/routes/config.js
 app.get('/api/config/settings', (req, res) => {
   // Provide current safe settings and defaults
   const settings = {
@@ -554,11 +440,12 @@ app.get('/api/config/settings', (req, res) => {
   const defaults = { ...settings };
 
   res.json({ settings, defaults });
-});
+});*/
 
 // Admin check moved to src/lib/admin (see DI)
 
 // Update admin settings or restore defaults
+/* moved to src/routes/config.js
 app.put('/api/config/settings', (req, res) => {
   if(!isAdminRequest(req)) return res.status(403).json({ error: 'Admin required' });
 
@@ -619,9 +506,10 @@ app.put('/api/config/settings', (req, res) => {
     logger.error('Failed to update settings', err);
     res.status(500).json({ error: 'Failed to update settings' });
   }
-});
+});*/
 
 // Test API connections
+/* moved to src/routes/config.js
 app.post('/api/test/connection', async (req, res) => {
   const { service, credentials } = req.body;
   
@@ -652,24 +540,9 @@ app.post('/api/test/connection', async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
-});
+});*/
 // Lightweight consolidated status (no side-effects) for header badges
-app.get('/api/status/services', async (req,res)=>{
-  const summary = { claude:false, database:false, clickup:false, drive:false };
-  // Claude: just check key present
-  summary.claude = !!process.env.CLAUDE_API_KEY;
-  // DB: simple pragma query
-  try { await new Promise((resolve,reject)=> db.get('SELECT 1 as ok', (e,row)=> e?reject(e):resolve(row))); summary.database=true; } catch{}
-  // ClickUp: consider either session OAuth token or server API key + team id
-  try {
-    const hasSession = !!(req.session?.user?.clickupToken);
-    const hasServer = !!process.env.CLICKUP_API_KEY && !!process.env.CLICKUP_TEAM_ID;
-    summary.clickup = hasSession || hasServer;
-  } catch{}
-  // Drive: token in session
-  try { summary.drive = !!(req.session?.user?.googleAccessToken); } catch{}
-  res.json({ success:true, services: summary, timestamp: new Date().toISOString() });
-});
+// moved to src/routes/status.js
 
 // ============= GOOGLE OAUTH =============
 
@@ -1355,408 +1228,48 @@ app.post('/api/mode/classify', async (req,res)=>{
   }
 });
 
-// Batch fetch chunk texts (for UI highlighting) ?ids=chunk1,chunk2
-*/
-app.get('/api/rag/chunks', (req,res)=>{
-  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-  const idsParam = req.query.ids||'';
-  if(!idsParam) return res.status(400).json({ error:'ids required' });
-  const ids = idsParam.split(',').map(s=>s.trim()).filter(Boolean).slice(0,500);
-  if(!ids.length) return res.status(400).json({ error:'no_valid_ids' });
-  const placeholders = ids.map(()=>'?').join(',');
-  db.all(`SELECT id,text,path,loc,src_start,src_end,source,type FROM rag_chunks WHERE id IN (${placeholders})`, ids, (err, rows)=>{
-    if(err) return res.status(500).json({ error:'db_error' });
-    res.json(rows||[]);
-  });
-});
+// Batch fetch chunk texts now handled in src/routes/rag.js
 
-// ----- RAG Feedback Endpoints -----
-// Submit feedback for a run (rating 1-5, optional comment)
-app.post('/api/rag/feedback', (req, res) => {
-  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-  const { run_id, rating, comment } = req.body||{};
-  if(!run_id || typeof rating !== 'number') return res.status(400).json({ error:'run_id and numeric rating required' });
-  db.run(`INSERT INTO rag_feedback (run_id, user_email, rating, comment) VALUES (?,?,?,?)`,
-    [run_id, req.session.user.email, rating, comment||null], (err)=>{
-      if(err) return res.status(500).json({ error:'db_error' });
-      res.json({ success:true });
-    });
-});
-
-// Aggregate feedback for a run
-app.get('/api/rag/feedback/:runId', (req, res) => {
-  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-  const runId = req.params.runId;
-  db.all(`SELECT rating, comment, created_at FROM rag_feedback WHERE run_id = ? ORDER BY created_at DESC LIMIT 50`, [runId], (err, rows)=>{
-    if(err) return res.status(500).json({ error:'db_error' });
-    if(!rows || !rows.length) return res.json({ run_id: runId, avg_rating: null, count:0, feedback: [] });
-    const sum = rows.reduce((a,r)=>a + (r.rating||0),0);
-    res.json({ run_id: runId, avg_rating: sum/rows.length, count: rows.length, feedback: rows });
-  });
-});
+// RAG feedback endpoints moved to src/routes/rag.js
 
 // Trigger embedding of pending lexicon terms (admin only)
-app.post('/api/rag/lexicon/embed', async (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  try {
-    const count = await embedAndStoreLexiconTerms(db);
-    res.json({ success:true, embedded: count });
-  } catch(e){
-    res.status(500).json({ error:'embed_failed', message: e.message });
-  }
-});
+// Lexicon endpoints handled in src/routes/rag.js
 
 // List lexicon terms (paged)
-app.get('/api/rag/lexicon', (req,res)=>{
-  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-  const limit = Math.min(parseInt(req.query.limit||'100',10), 500);
-  db.all('SELECT term,type,freq,sources,last_seen, (embedding IS NOT NULL) as embedded FROM rag_lexicon ORDER BY freq DESC LIMIT ?', [limit], (err, rows)=>{
-    if(err) return res.status(500).json({ error:'db_error' });
-    res.json(rows);
-  });
-});
+// Lexicon listing handled in src/routes/rag.js
 
 // ---- Metrics & Quality Dashboard Data ----
-app.get('/api/rag/metrics/overview', (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  // Aggregate in parallel style queries
-  const out = {};
-  db.get('SELECT COUNT(*) c FROM rag_runs', (e1,r1)=>{
-    out.total_runs = r1?.c||0;
-    db.get('SELECT COUNT(*) c FROM rag_feedback', (e2,r2)=>{
-      out.total_feedback = r2?.c||0;
-      db.get('SELECT AVG(rating) avg_rating FROM rag_feedback', (e3,r3)=>{
-        out.avg_rating = Number(r3?.avg_rating||0).toFixed(2);
-        db.get("SELECT AVG(latency_ms) avg_latency FROM rag_runs WHERE latency_ms>0", (e4,r4)=>{
-          out.avg_latency_ms = Math.round(r4?.avg_latency||0);
-          db.get("SELECT COUNT(*) c FROM rag_runs WHERE valid=0", (e5,r5)=>{
-            out.invalid_runs = r5?.c||0;
-            db.get("SELECT COUNT(*) c FROM rag_runs WHERE created_at >= datetime('now','-1 day')", (e6,r6)=>{
-              out.runs_last_24h = r6?.c||0;
-              res.json(out);
-            });
-          });
-        });
-      });
-    });
-  });
-});
+// Metrics overview handled by src/routes/rag.js
 
 // Promote human labels (product/entity terms) into lexicon and embed
-app.post('/api/rag/lexicon/promote', async (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  const { min_freq = 1 } = req.body||{};
-  // Find candidate product entities from human labels OR annotated entities with human source
-  const sql = `SELECT l.label_value term, COUNT(*) freq
-               FROM rag_labels l
-               WHERE l.label_type='entity' AND l.label_value NOT IN (SELECT term FROM rag_lexicon)
-               GROUP BY l.label_value HAVING freq >= ? LIMIT 200`;
-  db.all(sql, [min_freq], (err, rows)=>{
-    if(err) return res.status(500).json({ error:'db_error' });
-    if(!rows.length) return res.json({ promoted:0 });
-    const stmt = db.prepare('INSERT INTO rag_lexicon (term,type,freq,sources) VALUES (?,?,?,?) ON CONFLICT(term) DO UPDATE SET freq=freq+excluded.freq');
-    rows.forEach(r=>{ try { stmt.run(r.term.toLowerCase(), 'product', r.freq, 'human'); } catch(e){} });
-    stmt.finalize(async ()=>{
-      await embedAndStoreLexiconTerms(db);
-      res.json({ promoted: rows.length });
-    });
-  });
-});
+// Lexicon promote handled by src/routes/rag.js
 
 // Estimate precision@k (k=5,10) using feedback as relevance proxy (rating>=4) and top retrieved artifacts
-app.get('/api/rag/metrics/precision', (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  const kVals = [5,10];
-  db.all(`SELECT r.id run_id, f.rating, a.payload retrieve_payload
-          FROM rag_runs r
-          JOIN rag_feedback f ON f.run_id = r.id
-          JOIN rag_artifacts a ON a.run_id = r.id AND a.stage LIKE 'retrieve:%'
-          ORDER BY f.created_at DESC LIMIT 100`, [], (err, rows)=>{
-    if(err) return res.status(500).json({ error:'db_error' });
-    if(!rows.length) return res.json({ precision:{} });
-    const precision = { 5:0, 10:0 };
-    const counts = { 5:0, 10:0 };
-    rows.forEach(r=>{
-      try {
-        const arr = JSON.parse(r.retrieve_payload)||[];
-        kVals.forEach(k=>{
-          const slice = arr.slice(0,k);
-          if(!slice.length) return;
-          // Heuristic: treat doc relevant if top snippet had positive rating AND contains any support label patterns
-          const rel = (r.rating>=4)? 1:0;
-          precision[k] += rel * (slice.filter(s=> s.base_sim>0.2 || s.llm_rel>=3).length / k);
-          counts[k] += 1;
-        });
-      } catch(e){}
-    });
-    const out = {};
-    kVals.forEach(k=>{ out['p@'+k] = counts[k]? +(precision[k]/counts[k]).toFixed(3): null; });
-    res.json({ precision: out, samples: rows.length });
-  });
-});
+// Precision metrics handled by src/routes/rag.js
 
 // --- Ground Truth CRUD (admin) ---
-app.post('/api/rag/groundtruth', (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  const { query, chunk_id, relevant } = req.body||{};
-  if(!query || !chunk_id || typeof relevant !== 'boolean') return res.status(400).json({ error:'missing_fields' });
-  db.run('INSERT INTO rag_ground_truth (query,chunk_id,relevant) VALUES (?,?,?)', [query.trim(), chunk_id, relevant?1:0], function(err){
-    if(err) return res.status(500).json({ error:'db_error' });
-    res.json({ id:this.lastID, query, chunk_id, relevant });
-  });
-});
-
-app.get('/api/rag/groundtruth', (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  const { query: q, limit } = req.query||{};
-  const lim = Math.min(parseInt(limit||'200',10), 1000);
-  if(q){
-    db.all('SELECT * FROM rag_ground_truth WHERE query = ? ORDER BY created_at DESC LIMIT ?', [q, lim], (e, rows)=>{
-      if(e) return res.status(500).json({ error:'db_error' });
-      res.json(rows);
-    });
-  } else {
-    db.all('SELECT * FROM rag_ground_truth ORDER BY created_at DESC LIMIT ?', [lim], (e, rows)=>{
-      if(e) return res.status(500).json({ error:'db_error' });
-      res.json(rows);
-    });
-  }
-});
-
-app.delete('/api/rag/groundtruth/:id', (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  db.run('DELETE FROM rag_ground_truth WHERE id=?', [req.params.id], function(err){
-    if(err) return res.status(500).json({ error:'db_error' });
-    res.json({ deleted: this.changes });
-  });
-});
+// Ground truth CRUD handled by src/routes/rag.js
 
 // Ground truth based precision/recall evaluation
-app.get('/api/rag/metrics/groundtruth', (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  const kParams = (req.query.k || '5,10').split(',').map(x=>parseInt(x.trim(),10)).filter(x=>x>0 && x<=100);
-  const wantDetails = req.query.details==='1';
-  db.all('SELECT query, chunk_id, relevant FROM rag_ground_truth', [], (e, rows)=>{
-    if(e) return res.status(500).json({ error:'db_error' });
-    if(!rows.length) return res.json({ queries:0, metrics:{} });
-    // Group ground truth by query
-    const byQuery = new Map();
-    rows.forEach(r=>{
-      if(!byQuery.has(r.query)) byQuery.set(r.query, []);
-      byQuery.get(r.query).push(r);
-    });
-    const queries = Array.from(byQuery.keys());
-    const metricsAgg = {}; kParams.forEach(k=> metricsAgg[k] = { sumP:0, sumR:0, count:0 });
-    const details = [];
-    // Helper to process sequentially
-    const processNext = (idx)=>{
-      if(idx>=queries.length){
-        const out = {};
-        kParams.forEach(k=>{
-          out['p@'+k] = metricsAgg[k].count? +(metricsAgg[k].sumP/metricsAgg[k].count).toFixed(3): null;
-          out['r@'+k] = metricsAgg[k].count? +(metricsAgg[k].sumR/metricsAgg[k].count).toFixed(3): null;
-        });
-        return res.json({ queries: queries.length, metrics: out, details: wantDetails? details: undefined });
-      }
-      const q = queries[idx];
-      // latest run for this query
-      db.get('SELECT id FROM rag_runs WHERE query = ? ORDER BY created_at DESC LIMIT 1', [q], (er, runRow)=>{
-        if(er || !runRow){ processNext(idx+1); return; }
-        db.get("SELECT payload FROM rag_artifacts WHERE run_id = ? AND stage LIKE 'retrieve:%' ORDER BY id ASC LIMIT 1", [runRow.id], (ea, artRow)=>{
-          if(ea || !artRow){ processNext(idx+1); return; }
-          let retrieved = [];
-          try { retrieved = JSON.parse(artRow.payload)||[]; } catch(_){}
-          const gt = byQuery.get(q);
-          const relevantSet = new Set(gt.filter(g=>g.relevant).map(g=>g.chunk_id));
-          const totalRelevant = relevantSet.size || 1; // avoid zero division for recall
-          kParams.forEach(k=>{
-            const topK = retrieved.slice(0,k).map(r=>r.id);
-            const relRetrieved = topK.filter(id=>relevantSet.has(id)).length;
-            const precision = relRetrieved / k;
-            const recall = relRetrieved / totalRelevant;
-            metricsAgg[k].sumP += precision; metricsAgg[k].sumR += recall; metricsAgg[k].count += 1;
-            if(wantDetails){
-              details.push({ query:q, k, precision:+precision.toFixed(3), recall:+recall.toFixed(3), relRetrieved, kSize:k, totalRelevant });
-            }
-          });
-          processNext(idx+1);
-        });
-      });
-    };
-    processNext(0);
-  });
-});
+// Ground truth metrics handled by src/routes/rag.js
 
-// ---- Audit export (JSON bundle) ----
-app.get('/api/rag/audit/:runId', (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  const runId = req.params.runId;
-  const bundle = {};
-  db.get('SELECT * FROM rag_runs WHERE id=?', [runId], (e1, runRow)=>{
-    if(e1||!runRow) return res.status(404).json({ error:'run_not_found' });
-    bundle.run = runRow;
-    db.all('SELECT stage,payload,created_at FROM rag_artifacts WHERE run_id=? ORDER BY id', [runId], (e2, artRows)=>{
-      bundle.artifacts = artRows||[];
-      db.all('SELECT rating,comment,created_at FROM rag_feedback WHERE run_id=?', [runId], (e3, fbRows)=>{
-        bundle.feedback = fbRows||[];
-        // collect chunk ids from artifacts retrieve & reason for evidence snapshot
-        const chunkIds = new Set();
-        (bundle.artifacts||[]).forEach(a=>{
-          if(a.stage.startsWith('retrieve:')){
-            try { JSON.parse(a.payload).forEach(c=> c.id && chunkIds.add(c.id)); } catch(e){}
-          }
-          if(a.stage.startsWith('reason:')){
-            try { const jr = JSON.parse(a.payload); (jr.support||[]).forEach(s=> s.id && chunkIds.add(s.id)); } catch(e){}
-          }
-        });
-        const idArr = Array.from(chunkIds);
-        if(!idArr.length) return res.json(bundle);
-        const placeholders = idArr.map(()=>'?').join(',');
-        db.all(`SELECT id,source,type,path,loc,src_start,src_end,text FROM rag_chunks WHERE id IN (${placeholders})`, idArr, (e4, rows)=>{
-          bundle.evidence_chunks = rows||[];
-          res.json(bundle);
-        });
-      });
-    });
-  });
-});
-
-// ZIP stream variant: produces a downloadable archive with structured JSON files
-app.get('/api/rag/audit/:runId/zip', (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  const runId = req.params.runId;
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="audit_${runId}.zip"`);
-  const archive = archiver('zip', { zlib: { level: 9 } });
-  archive.on('error', err=>{ logger.error('Audit zip error', err.message); try { res.status(500).end(); } catch(_){} });
-  archive.pipe(res);
-  // Gather data in nested callbacks then append
-  db.get('SELECT * FROM rag_runs WHERE id=?', [runId], (e1, runRow)=>{
-    if(e1 || !runRow){ archive.append(JSON.stringify({ error:'run_not_found' }), { name: 'error.json' }); return archive.finalize(); }
-    archive.append(JSON.stringify(runRow,null,2), { name: 'run.json' });
-    db.all('SELECT stage,payload,created_at FROM rag_artifacts WHERE run_id=? ORDER BY id', [runId], (e2, artRows)=>{
-      archive.append(JSON.stringify(artRows||[],null,2), { name: 'artifacts.json' });
-      db.all('SELECT rating,comment,created_at FROM rag_feedback WHERE run_id=?', [runId], (e3, fbRows)=>{
-        archive.append(JSON.stringify(fbRows||[],null,2), { name:'feedback.json' });
-        // derive chunk ids
-        const chunkIds = new Set();
-        (artRows||[]).forEach(a=>{
-          if(a.stage.startsWith('retrieve:')){ try { JSON.parse(a.payload).forEach(c=> c.id && chunkIds.add(c.id)); } catch(_){} }
-          if(a.stage.startsWith('reason:')){ try { const jr = JSON.parse(a.payload); (jr.support||[]).forEach(s=> s.id && chunkIds.add(s.id)); } catch(_){} }
-        });
-        const idArr = Array.from(chunkIds);
-        if(!idArr.length){ archive.finalize(); return; }
-        const placeholders = idArr.map(()=>'?').join(',');
-        db.all(`SELECT id,source,type,path,loc,src_start,src_end,text FROM rag_chunks WHERE id IN (${placeholders})`, idArr, (e4, rows)=>{
-          archive.append(JSON.stringify(rows||[],null,2), { name:'evidence_chunks.json' });
-          // Quick index.html for humans
-          const summaryHtml = `<!DOCTYPE html><html><body><h1>Audit ${runId}</h1><pre>${escapeHtml(JSON.stringify({ run: runRow, counts:{ artifacts: (artRows||[]).length, feedback:(fbRows||[]).length, evidence:(rows||[]).length } }, null,2))}</pre></body></html>`;
-          archive.append(summaryHtml, { name:'index.html' });
-          archive.finalize();
-        });
-      });
-    });
-  });
-});
-
-function escapeHtml(str){
-  return str.replace(/[&<>"']/g, c=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
-}
+// Audit export endpoints removed (handled in router or not used)
 
 // ---- Adaptive Retrieval Weights ----
-app.get('/api/rag/retrieval/weights', (req,res)=>{
-  db.get('SELECT w_sim,w_bm25,w_llm,updated_at FROM rag_retrieval_weights WHERE id=1', (err,row)=>{
-    if(err) return res.status(500).json({ error:'db_error' });
-    res.json(row||{});
-  });
-});
+// Retrieval weights endpoints handled by src/routes/rag.js
 
 // Recompute weights from recent feedback (simple heuristic)
-app.post('/api/rag/retrieval/weights/recompute', (req,res)=>{
-  if(!isAdminRequest(req)) return res.status(403).json({ error:'Admin required' });
-  // heuristic: look at last 30 runs with feedback, average top chunk metrics saved in artifacts retrieve, weight scaled by rating
-  const limit = 30;
-  db.all(`SELECT r.id run_id, f.rating, a.payload retrieve_payload
-          FROM rag_runs r
-          JOIN rag_feedback f ON f.run_id = r.id
-          JOIN rag_artifacts a ON a.run_id = r.id AND a.stage LIKE 'retrieve:%'
-          ORDER BY f.created_at DESC LIMIT ?`, [limit], (err, rows)=>{
-    if(err) return res.status(500).json({ error:'db_error' });
-    if(!rows.length) return res.json({ updated:false, reason:'no_feedback' });
-    let sumSim=0, sumBm=0, sumLlm=0, weightTotal=0;
-    rows.forEach(r=>{
-      try {
-        const arr = JSON.parse(r.retrieve_payload)||[];
-        if(!arr.length) return;
-        const top = arr[0];
-        const rating = r.rating||1;
-        sumSim += (top.base_sim||0)*rating;
-        sumBm  += (top.base_bm25||0)*rating;
-        sumLlm += (top.llm_rel!=null? (top.llm_rel/5): 0)*rating;
-        weightTotal += rating;
-      } catch(e){}
-    });
-    if(weightTotal===0) return res.json({ updated:false, reason:'no_valid_data' });
-    let wSim = sumSim/weightTotal; let wBm = sumBm/weightTotal; let wLlm = sumLlm/weightTotal;
-    const norm = wSim + wBm + wLlm || 1;
-    wSim/=norm; wBm/=norm; wLlm/=norm;
-    db.run('UPDATE rag_retrieval_weights SET w_sim=?, w_bm25=?, w_llm=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [wSim, wBm, wLlm], (uErr)=>{
-      if(uErr) return res.status(500).json({ error:'update_failed' });
-      res.json({ updated:true, weights:{ w_sim:wSim, w_bm25:wBm, w_llm:wLlm } });
-    });
-  });
-});
+// Retrieval recompute handled by src/routes/rag.js
 
 // ---- Active Learning: label management ----
-app.post('/api/rag/labels', (req,res)=>{
-  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-  const { chunk_id, label_type, label_value } = req.body||{};
-  if(!chunk_id || !label_type || !label_value) return res.status(400).json({ error:'missing_fields' });
-  db.run('INSERT INTO rag_labels (chunk_id,label_type,label_value,source) VALUES (?,?,?,?)', [chunk_id, label_type, label_value, 'human'], (err)=>{
-    if(err) return res.status(500).json({ error:'db_error' });
-    res.json({ success:true });
-  });
-});
-
-app.get('/api/rag/labels', (req,res)=>{
-  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-  const { chunk_id } = req.query;
-  if(!chunk_id) return res.status(400).json({ error:'chunk_id required' });
-  db.all('SELECT label_type,label_value,source,created_at FROM rag_labels WHERE chunk_id = ? ORDER BY created_at DESC', [chunk_id], (err, rows)=>{
-    if(err) return res.status(500).json({ error:'db_error' });
-    res.json(rows);
-  });
-});
+// Labels endpoints handled by src/routes/rag.js
 
 // Uncertain chunks suggestion (simple: chunks with claim_statement but no prohibition/permission labels and no human labels)
-app.get('/api/rag/active/uncertain', (req,res)=>{
-  if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-  const limit = Math.min(parseInt(req.query.limit||'20',10), 100);
-  db.all(`SELECT c.id,c.text FROM rag_chunks c
-          LEFT JOIN rag_chunk_annotations a ON a.chunk_id=c.id AND a.annotator='claims_v1'
-          LEFT JOIN rag_labels l ON l.chunk_id=c.id
-          WHERE (a.data LIKE '%claim_statement%' AND (a.data NOT LIKE '%prohibition%' AND a.data NOT LIKE '%permission%'))
-            AND l.id IS NULL
-          LIMIT ?`, [limit], (err, rows)=>{
-    if(err) return res.status(500).json({ error:'db_error' });
-    res.json(rows);
-  });
-});
+// Active learning endpoints handled by src/routes/rag.js
 
 // ClickUp API proxy
 
-// Helper to get current user's ClickUp token from DB/session
-async function getUserClickUpToken(req) {
-  if (!req.session.user) throw new Error('Not authenticated');
-  return new Promise((resolve, reject) => {
-    db.get('SELECT clickup_token FROM users WHERE email = ?', [req.session.user.email], (err, row) => {
-      if (err) return reject(err);
-      resolve(row?.clickup_token || req.session.user.clickupToken || null);
-    });
-  });
-}
-
-// Legacy Google token refresh helper removed (moved to src/lib/tokens)
+// Legacy token helpers handled in src/lib/tokens
 
  
 
@@ -1775,68 +1288,7 @@ async function getUserClickUpToken(req) {
 // ============= CONVERSATIONS =============
 
 // Get user conversations
-app.get('/api/conversations', (req, res) => {
-  if (!req.session.user) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-
-  db.all(
-    `SELECT id, title, created_at, updated_at FROM conversations 
-     WHERE user_email = ? ORDER BY updated_at DESC LIMIT 50`,
-    [req.session.user.email],
-    (err, rows) => {
-      if (err) {
-        logger.error('Database error', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
-      res.json(rows);
-    }
-  );
-});
-
-// Save conversation
-app.post('/api/conversations', (req, res) => {
-  if (!req.session.user) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-
-  const { id, title, messages } = req.body;
-
-  db.run(
-    `INSERT OR REPLACE INTO conversations (id, user_email, title, messages, updated_at) 
-     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-    [id, req.session.user.email, title, JSON.stringify(messages)],
-    (err) => {
-      if (err) {
-        logger.error('Database error', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
-      res.json({ success: true });
-    }
-  );
-});
-
-// Get conversation details
-app.get('/api/conversations/:id', (req, res) => {
-  if (!req.session.user) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-
-  db.get(
-    `SELECT * FROM conversations WHERE id = ? AND user_email = ?`,
-    [req.params.id, req.session.user.email],
-    (err, row) => {
-      if (err) {
-        logger.error('Database error', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
-      if (row) {
-        row.messages = JSON.parse(row.messages);
-      }
-      res.json(row);
-    }
-  );
-});
+// conversations endpoints moved to src/routes/conversations.js
 
 // ============= USER SESSION =============
 

@@ -1,6 +1,6 @@
 const express = require('express');
 
-module.exports = function statusRouterFactory({ APP_VERSION, claudePing, testDatabase }){
+module.exports = function statusRouterFactory({ APP_VERSION, claudePing, testDatabase, db }){
   const router = express.Router();
 
   // Version
@@ -47,6 +47,31 @@ module.exports = function statusRouterFactory({ APP_VERSION, claudePing, testDat
     })();
   });
 
+  // Lightweight consolidated status (no side-effects) for header badges
+  router.get('/api/status/services', async (req, res) => {
+    const summary = { claude: false, database: false, clickup: false, drive: false };
+    // Claude: just check key present
+    summary.claude = !!process.env.CLAUDE_API_KEY;
+    // Database: prefer a read-only ping if db provided, else fallback to testDatabase
+    try {
+      if (db && typeof db.get === 'function') {
+        await new Promise((resolve, reject) => db.get('SELECT 1 as ok', (e) => (e ? reject(e) : resolve())));
+        summary.database = true;
+      } else {
+        const t = await testDatabase();
+        summary.database = !!t.success;
+      }
+    } catch (_) {}
+    // ClickUp: session OAuth token or server API key + team id
+    try {
+      const hasSession = !!(req.session?.user?.clickupToken);
+      const hasServer = !!process.env.CLICKUP_API_KEY && !!process.env.CLICKUP_TEAM_ID;
+      summary.clickup = hasSession || hasServer;
+    } catch (_) {}
+    // Drive: token in session
+    try { summary.drive = !!(req.session?.user?.googleAccessToken); } catch (_) {}
+    res.json({ success: true, services: summary, timestamp: new Date().toISOString() });
+  });
+
   return router;
 }
-
