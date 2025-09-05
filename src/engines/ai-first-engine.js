@@ -360,7 +360,7 @@ Analisi AI (estratto): intent=${analysis.intent}; keywords=${(analysis.entities?
 			}
 			console.log(`✅ Found ${unique.length} Drive documents (AI term plan)`);
 			return unique;
-			for (const term of prioritized) {
+			/* for (const term of prioritized) {
 				const escaped = term.replace(/'/g,"\\'");
 				const qParts = [`(name contains '${escaped}' or fullText contains '${escaped}')`, 'trashed = false'];
 				if (searchParams.dateFilter && searchParams.dateFilter !== 'all') {
@@ -407,7 +407,7 @@ Analisi AI (estratto): intent=${analysis.intent}; keywords=${(analysis.entities?
 				}
 			} else { uniqueResults.forEach(f => { f.comments = f.comments || []; f.comments_count = f.comments.length || 0; }); }
 			console.log(`✅ Found ${uniqueResults.length} Drive documents`);
-			return uniqueResults;
+			return uniqueResults; */
 		} catch (error) { console.error('Drive fetch error:', error.response?.data || error.message); return null; }
 	}
 

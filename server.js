@@ -812,7 +812,7 @@ app.post('/api/rag/chat', async (req, res) => {
       try {
         const c = await axios.get(`https://api.clickup.com/api/v2/task/${taskId}/comment`,{ headers:{ Authorization: clickupToken } });
         comments = c.data?.comments || [];
-      } catch(e){ /* ignore */ }
+      } catch(e){ }
       if (details) {
         const title = details.name || '(senza titolo)';
         const status = details.status?.status || 'unknown';

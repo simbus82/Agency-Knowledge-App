@@ -27,6 +27,7 @@ export default [
         module: 'readonly',
         __dirname: 'readonly',
         process: 'readonly',
+        Buffer: 'readonly',
         console: 'readonly',
         setTimeout: 'readonly',
         setInterval: 'readonly'
@@ -55,7 +56,28 @@ export default [
         localStorage: 'readonly',
         sessionStorage: 'readonly',
         fetch: 'readonly',
-        URL: 'readonly'
+        URL: 'readonly',
+        // Standard browser APIs
+        console: 'readonly',
+        setTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearTimeout: 'readonly',
+        URLSearchParams: 'readonly',
+        location: 'readonly',
+        confirm: 'readonly',
+        AbortController: 'readonly',
+        // Third-party libs loaded via script tags
+        DOMPurify: 'readonly',
+        marked: 'readonly',
+        Prism: 'readonly',
+        // App singletons exposed globally by other scripts
+        UIManager: 'readonly',
+        StateManager: 'readonly',
+        MarkdownProcessor: 'readonly',
+        CONFIG: 'readonly',
+        // Optional hooks used by UI when present
+        sendMessage: 'readonly',
+        module: 'readonly'
       }
     },
     rules: {
@@ -67,4 +89,3 @@ export default [
     }
   }
 ];
-
