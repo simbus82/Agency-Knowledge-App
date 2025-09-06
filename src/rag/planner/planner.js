@@ -41,7 +41,7 @@ function buildAvailableToolsDescriptor(){
     return parts.join('\n');
 }
 
-async function aiPlan(query) {
+async function aiPlan(query, opts = {}) {
     const key = query.trim().toLowerCase();
     if (planCache.has(key)) return planCache.get(key);
 
@@ -151,7 +151,8 @@ Ora, crea il piano JSON per la query: "${query}". Fornisci solo il JSON valido, 
     if (!process.env.CLAUDE_API_KEY) throw new Error('CLAUDE_API_KEY missing for planner');
 
     try {
-        const raw = await claudeRequest(CLAUDE_MODEL_PLANNER, prompt, 2000, 0.1);
+        const model = opts.model || CLAUDE_MODEL_PLANNER;
+        const raw = await claudeRequest(model, prompt, 2000, 0.1);
         const jsonStart = raw.indexOf('{');
         const jsonEnd = raw.lastIndexOf('}');
         if (jsonStart >= 0 && jsonEnd > jsonStart) {

@@ -131,15 +131,26 @@ const App = {
     // Load available Claude models
     async loadClaudeModels() {
         try {
-            const response = await fetch(`${CONFIG.API_BASE}/api/claude/models`);
-            if (response.ok) {
-                const models = await response.json();
-                StateManager.setState({ models });
-                
-                // Set default model
-                const defaultModel = models.find(m => m.recommended)?.id || models[0]?.id;
-                StateManager.setState({ selectedModel: defaultModel });
+            const response = await fetch(`${CONFIG.API_BASE}/api/claude/models`, { credentials: 'include' });
+            if (!response.ok) throw new Error('models_fetch_failed');
+            const models = await response.json();
+
+            // Try to read current active model from backend/session
+            let activeModel = null;
+            try {
+                const statusResp = await fetch(`${CONFIG.API_BASE}/api/claude/models/status`, { credentials: 'include' });
+                if (statusResp.ok) {
+                    const status = await statusResp.json();
+                    activeModel = status.active_model || null;
+                }
+            } catch(_){}
+
+            // Fallback to recommended or first model if backend status not available
+            if (!activeModel) {
+                activeModel = models.find(m => m.recommended)?.id || models[0]?.id || null;
             }
+
+            StateManager.setState({ models, selectedModel: activeModel });
         } catch (error) {
             console.error('Failed to load models:', error);
         }
@@ -318,7 +329,12 @@ async function sendMessage() {
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
                 signal: controller.signal,
-                    body: JSON.stringify({ message: userMessage, include_chunk_texts: true })
+                    body: JSON.stringify({
+                        message: userMessage,
+                        include_chunk_texts: true,
+                        // Usa sempre il modello scelto dall'utente per questa richiesta
+                        model: StateManager.getState().selectedModel || null
+                    })
             });
             clearTimeout(timeoutId);
             if(!response.ok){
@@ -507,12 +523,25 @@ function startFeatureConversation(feature) {
 function changeModel() {
     const selector = document.getElementById('modelSelector');
     const selectedModel = selector.value;
+    // Update local state immediately for responsive UI
     StateManager.setState({ selectedModel });
+    // Persist preference to backend (session + DB)
+    fetch(`${CONFIG.API_BASE}/api/user/preferences`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ selectedModel })
+    }).then(r => {
+        if (!r.ok) throw new Error('preferences_update_failed');
+        UIManager.showToast('Modello AI aggiornato', 'success');
+    }).catch(err => {
+        console.warn('Model preference update failed', err);
+        UIManager.showToast('Impossibile salvare il modello. Riprova.', 'error');
+    });
     // Re-enable if was disabled due to invalid selection
     const input = document.getElementById('userInput');
     if(input) input.disabled = false;
     selector.classList.remove('warning');
-    UIManager.showToast('Modello cambiato', 'success');
 }
 
 // User menu functions

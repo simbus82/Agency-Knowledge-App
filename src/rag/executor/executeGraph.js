@@ -64,7 +64,7 @@ function toChunksFromAny(input){
   return coerce(input);
 }
 
-async function executeGraph(graph){
+async function executeGraph(graph, opts = {}){
   await ensureReady();
   const store = {};
   for(const task of graph.tasks){
@@ -139,7 +139,7 @@ async function executeGraph(graph){
     } else if(task.type==='reason'){
   if(!Array.isArray(task.inputs) || !task.inputs.length) throw new Error(`task_inputs_missing:${task.id}`);
   const inputs = task.inputs.flatMap(id => store[id]||[]);
-      const reasoned = await reason(inputs, task.goal);
+      const reasoned = await reason(inputs, task.goal, { model: opts.model });
       store[task.id] = reasoned;
       try { db.run('INSERT INTO rag_artifacts (run_id, stage, payload) VALUES (?,?,?)', [graph.run_id||null, `reason:${task.id}`, JSON.stringify(reasoned)]); } catch(e){}
     } else if(task.type==='validate'){
@@ -167,7 +167,7 @@ function serializeForReasoner(chunks){
   }));
 }
 
-async function aiReason(chunks, goal){
+async function aiReason(chunks, goal, modelOverride){
   if(!process.env.CLAUDE_API_KEY) return null;
   const data = serializeForReasoner(chunks);
   const cacheKey = JSON.stringify({ g: goal, h: data.map(d=>d.id).join(',') });
@@ -182,15 +182,15 @@ Regole:
 - Usa type tra: policy_block, comparison, timeline, summary, other.
 `; 
   try {
-    const raw = await claudeRequest(CLAUDE_MODEL_REASONER, prompt, 2000, 0);
+    const raw = await claudeRequest(modelOverride || CLAUDE_MODEL_REASONER, prompt, 2000, 0);
     const s = raw.indexOf('{'); const e = raw.lastIndexOf('}');
     if(s>=0 && e>s){ const parsed = JSON.parse(raw.slice(s,e+1)); reasonCache.set(cacheKey, parsed); return parsed; }
   } catch(e){ /* ignore */ }
   return null;
 }
 
-async function reason(chunks, goal){
-  const ai = await aiReason(chunks, goal);
+async function reason(chunks, goal, opts = {}){
+  const ai = await aiReason(chunks, goal, opts.model);
   if(ai && Array.isArray(ai.conclusions)){
     // map support to uniform structure
     const support = (ai.support||[]).flatMap(s=> (s.evidence_ids||[]).map(id=>{

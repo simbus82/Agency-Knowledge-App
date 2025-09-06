@@ -541,15 +541,16 @@ const UIManager = {
     // Update model selector
     updateModelSelector() {
         const selector = document.getElementById('modelSelector');
-        const models = StateManager.getState().models;
+        const state = StateManager.getState();
+        const models = state.models;
+        const active = state.selectedModel;
         
         if (!selector || !models.length) return;
         
-        selector.innerHTML = models.map(model => 
-            `<option value="${model.id}" ${model.recommended ? 'selected' : ''}>
-                ${model.name}
-            </option>`
-        ).join('');
+        selector.innerHTML = models.map(model => {
+            const isSelected = active ? (model.id === active) : !!model.recommended;
+            return `<option value="${model.id}" ${isSelected ? 'selected' : ''}>${model.name}</option>`;
+        }).join('');
     },
 
     // Set loading state for send button

@@ -21,9 +21,12 @@ module.exports = function ragRouterFactory(deps){
   // RAG chat completo con fast-path (portato da server.js)
   router.post('/api/rag/chat', async (req, res) => {
     if(!req.session.user) return res.status(401).json({ error:'Not authenticated' });
-    const { message, include_chunk_texts=false } = req.body || {};
+    const { message, include_chunk_texts=false, model: requestedModel } = req.body || {};
     if(!message) return res.status(400).json({ error:'message required' });
     const startTs = Date.now();
+    // Modello effettivo scelto dall'utente (request override) o da sessione
+    let effectiveModel = null;
+    try { effectiveModel = sanitizeModelId(requestedModel || req.session.user.selectedModel); } catch(_) { effectiveModel = req.session.user.selectedModel; }
 
     // Small-talk / greeting
     try {
@@ -34,7 +37,8 @@ module.exports = function ragRouterFactory(deps){
         const clickupConnected = !!(req.session.user?.clickupToken || process.env.CLICKUP_API_KEY);
         const driveConnected = !!(req.session.user?.googleAccessToken || (process.env.GOOGLE_CREDENTIALS_JSON && process.env.GOOGLE_IMPERSONATED_USER_EMAIL));
         const prompt = `Sei l'Assistente Esecutivo AI di 56k Agency. Saluta l'utente (${userName}) in modo caldo e professionale in italiano, spiega brevemente cosa puoi fare con le connessioni disponibili e proponi 3 esempi di domande utili.\nConnessioni: ClickUp=${clickupConnected?'connesso':'non connesso'}, Drive=${driveConnected?'connesso':'non connesso'}.`;
-        const text = await claudeRequest(process.env.CLAUDE_RAG_UTILITY_MODEL || process.env.SELECTED_CLAUDE_MODEL || 'claude-sonnet-4-20250514', prompt, 400, 0.2);
+        // Usa sempre il modello scelto dall'utente per ogni richiesta
+        const text = await claudeRequest(effectiveModel, prompt, 400, 0.2);
         return res.json({ run_id: null, query: message, intent: { action:'CHAT' }, answer: text, latency_ms: Date.now()-startTs, graph: { tasks: [] }, structured: { result: { conclusions: [text], support: [] } } });
       }
     } catch(_){}
@@ -157,7 +161,7 @@ module.exports = function ragRouterFactory(deps){
     } catch(_){}
 
     // Plan
-    let graph; try { graph = await plan(message); } catch(e){ logger.error('Planner failed', e.message||e); return res.status(500).json({ error:'planner_failed', message:'Pianificazione AI non disponibile.' }); }
+    let graph; try { graph = await plan(message, { model: effectiveModel }); } catch(e){ logger.error('Planner failed', e.message||e); return res.status(500).json({ error:'planner_failed', message:'Pianificazione AI non disponibile.' }); }
     // Goal/augment/sanitize
     try { graph.intents = Array.isArray(graph.intents)? Array.from(new Set([...graph.intents, intent.action.toLowerCase()])) : [intent.action.toLowerCase()]; const reasonTask = graph.tasks.find(t=>t.type==='reason'); if(reasonTask){ if(intent.action==='STATUS') reasonTask.goal='status'; else if(intent.action==='REPORT') reasonTask.goal='report'; else if(intent.action==='COMPARE') reasonTask.goal='comparison'; else if(intent.action==='RISKS') reasonTask.goal='risks'; else if(intent.action==='LIST') reasonTask.goal='listing'; else reasonTask.goal = reasonTask.goal||'summary'; } } catch(adjErr){ logger.warning('Goal adjust failed', { error: adjErr.message }); }
     try { if(graph && Array.isArray(graph.tasks)){ const seen=[]; let fixed=0; graph.tasks.forEach((t,i)=>{ if(!t.id){ t.id='t'+(i+1); fixed++; } if(t.type!=='retrieve'){ if(!Array.isArray(t.inputs)||!t.inputs.length){ const fallback = seen.slice().reverse().find(id=>id); if(fallback){ t.inputs=[fallback]; fixed++; } } } seen.push(t.id); }); if(fixed) logger.info('Planner graph sanitized', { fixed }); } } catch(saniErr){ logger.error('Graph sanitize failed', saniErr.message); }
@@ -169,7 +173,7 @@ module.exports = function ragRouterFactory(deps){
 
     // Execute
     const runId = require('crypto').randomUUID(); graph.run_id = runId; let execResult;
-    try { execResult = await executeGraph(graph); } catch(execErr){ logger.error('RAG execution failed', execErr.message||execErr); return res.status(500).json({ error:'rag_failed', message:'Pipeline non riuscita.' }); }
+    try { execResult = await executeGraph(graph, { model: effectiveModel }); } catch(execErr){ logger.error('RAG execution failed', execErr.message||execErr); return res.status(500).json({ error:'rag_failed', message:'Pipeline non riuscita.' }); }
 
     // Fallback se mancano evidenze ma si chiedono task in ritardo/urgenti
     try { const wantsOverdueGeneral = /(in\s+ritardo|ritardi|overdue|scadenz|scadut[oi]e?|urgenti?|priorit\u00e0\s*alta|alta\s*priorit\u00e0)/i.test(message||''); const missingEvidence = !execResult || ((!execResult.support || !execResult.support.length) && (!execResult.conclusions || !execResult.conclusions.length) && !execResult.text); if (wantsOverdueGeneral && missingEvidence) { const clickup = require('../connectors/clickupConnector'); const userClickupToken = req.session.user?.clickupToken || null; let teamId = process.env.CLICKUP_TEAM_ID || null; if(!teamId && userClickupToken){ try { const tResp = await axios.get('https://api.clickup.com/api/v2/team', { headers:{ Authorization: userClickupToken } }); teamId = tResp.data?.teams?.[0]?.id || null; } catch(_){} } if (teamId || userClickupToken || process.env.CLICKUP_API_KEY) { const chunks = await clickup.searchTasks({ teamId, overdueOnly: true, includeClosed: false, limit: 50, token: userClickupToken }); if (Array.isArray(chunks) && chunks.length) { const support = chunks.slice(0, 15).map((c)=>({ id:c.id, snippet:c.text.slice(0,200), path: c.path })); execResult = { conclusions: [`Trovati ${chunks.length} task rilevanti (in ritardo o aperti prossimi alla scadenza).`], support }; logger.info('Applied direct ClickUp fallback with support', { count: chunks.length }); } } } } catch(fbErr){ logger.warning('Direct ClickUp fallback failed', { error: fbErr.message }); }
@@ -181,7 +185,7 @@ module.exports = function ragRouterFactory(deps){
     if(include_chunk_texts){ try { const chunkIds = new Set(); (execResult.support||[]).forEach(s=> s.id && chunkIds.add(s.id)); (execResult.conclusion_grounding||[]).forEach(cg=> (cg.spans||[]).forEach(sp=> sp.chunk_id && chunkIds.add(sp.chunk_id))); const ids = Array.from(chunkIds).slice(0,300); if(ids.length){ const placeholders = ids.map(()=>'?').join(','); await new Promise(resolve=>{ db.all(`SELECT id,text,path,loc,src_start,src_end,source,type FROM rag_chunks WHERE id IN (${placeholders})`, ids, (e,rows)=>{ if(!e&&rows) execResult.chunk_texts=rows; resolve(); }); }); } else execResult.chunk_texts=[]; } catch(enrichErr){ logger.error('chunk_text enrichment failed', enrichErr.message); } }
 
     // Synthesize
-    let answer = await synthesizeConversationalAnswer(message, intent, execResult, sanitizeModelId(req.session.user.selectedModel), process.env.CLAUDE_API_KEY);
+    let answer = await synthesizeConversationalAnswer(message, intent, execResult, effectiveModel, process.env.CLAUDE_API_KEY);
     return res.json({ run_id: runId, query: message, intent, answer, latency_ms: latency, graph, structured: execResult });
   });
 
